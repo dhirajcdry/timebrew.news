@@ -8,6 +8,7 @@ from shared.utils.response import create_response
 from shared.utils.ai_service import ai_service
 from shared.utils.text_utils import format_list_with_quotes
 from shared.utils.other_utils import format_time_ampm
+from shared.utils.url_utils import filter_live_article_urls
 from shared.db.queries import (
     get_run,
     get_brew_by_id,
@@ -232,6 +233,8 @@ BEGIN JSON:"""
                 ),
                 model=model,
                 temperature=0.2,
+                # Headroom for a full 6–8 article payload (~2k tokens observed);
+                # 4000 is comfortably above the largest real responses.
                 max_tokens=4000,
                 timeout=60,
             )
@@ -292,6 +295,15 @@ BEGIN JSON:"""
         print(
             f"[NEWS_CURATOR] Article curation completed: total_articles={len(articles)}, response_keys={list(response_data.keys()) if isinstance(response_data, dict) else 'list'}, curator_notes_provided={bool(curator_notes.strip())}"
         )
+
+        # Drop articles whose URL doesn't resolve — guards against the occasional
+        # dead/hallucinated link reaching the reader's email. The filter keeps the
+        # original list if it would otherwise empty out (false-negative safety).
+        if articles:
+            articles, dropped = filter_live_article_urls(articles)
+            if dropped:
+                dropped_urls = [a.get("url") for a in dropped]
+                print(f"[NEWS_CURATOR] Dropped {len(dropped)} article(s) with unreachable URLs: {dropped_urls}")
 
         # A genuine slow news day produces curator_notes explaining why; getting
         # neither articles nor notes means the response shape was wrong and we
