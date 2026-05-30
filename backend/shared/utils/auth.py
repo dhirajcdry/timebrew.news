@@ -5,7 +5,7 @@ from typing import Optional, Tuple, Dict, Any
 import boto3
 
 from .response import create_response
-from .db import get_db_connection
+from shared.db.queries import get_user_by_cognito_id, get_brew, get_run, get_editor_log
 # from .logger import get_logger
 
 # logger = get_logger(__name__)
@@ -69,33 +69,22 @@ def get_authenticated_user(event: Dict[str, Any]) -> Tuple[Optional[Dict[str, st
     if auth_error:
         return None, auth_error
 
-    # Get user from database
-    conn = None
+    # Get user from DynamoDB
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        cursor.execute(
-            "SELECT id, email, cognito_id FROM time_brew.users WHERE cognito_id = %s AND is_active = true",
-            (cognito_id,)
-        )
-        user = cursor.fetchone()
+        user = get_user_by_cognito_id(cognito_id)
 
         if not user:
             return None, create_response(404, {"error": "User account not found or inactive"})
 
         return {
-            "id": str(user[0]),
-            "email": user[1],
-            "cognito_id": user[2]
+            "id": str(user["id"]),
+            "email": user["email"],
+            "cognito_id": user["cognito_id"]
         }, None
 
     except Exception as e:  # pylint: disable=broad-except
         print(f"[AUTH] ERROR: Database error in get_authenticated_user: {str(e)}")
         return None, create_response(500, {"error": "Failed to retrieve user information"})
-    finally:
-        if conn:
-            conn.close()
 
 
 def validate_resource_ownership(user_id: str, resource_type: str,
@@ -113,32 +102,20 @@ def validate_resource_ownership(user_id: str, resource_type: str,
         - If valid: (True, None)
         - If invalid: (False, error_response_dict)
     """
-    conn = None
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
         if resource_type == 'brew':
-            cursor.execute(
-                "SELECT 1 FROM time_brew.brews WHERE id = %s AND user_id = %s",
-                (resource_id, user_id)
-            )
+            owned = get_brew(user_id, resource_id) is not None
         elif resource_type == 'briefing':
-            # Check via editor_logs or run_tracker
-            cursor.execute(
-                "SELECT 1 FROM time_brew.editor_logs WHERE run_id = %s AND user_id = %s",
-                (resource_id, user_id)
-            )
+            # editor_logs keyed by run_id; the run_id is the editor_log PK
+            editor = get_editor_log(resource_id)
+            owned = bool(editor) and str(editor.get("user_id")) == str(user_id)
         elif resource_type == 'run':
-            cursor.execute(
-                "SELECT 1 FROM time_brew.run_tracker WHERE run_id = %s AND user_id = %s",
-                (resource_id, user_id)
-            )
+            run = get_run(resource_id)
+            owned = bool(run) and str(run.get("user_id")) == str(user_id)
         else:
             return False, create_response(400, {"error": f"Invalid resource type: {resource_type}"})
 
-        result = cursor.fetchone()
-        if not result:
+        if not owned:
             return False, create_response(403,
                                           {"error": "Access denied: resource not found or not owned by user"})
 
@@ -147,9 +124,6 @@ def validate_resource_ownership(user_id: str, resource_type: str,
     except Exception as e:  # pylint: disable=broad-except
         print(f"[AUTH] ERROR: Database error in validate_resource_ownership: {str(e)}")
         return False, create_response(500, {"error": "Failed to validate resource ownership"})
-    finally:
-        if conn:
-            conn.close()
 
 
 def safe_parse_json_array(value: Any) -> list:

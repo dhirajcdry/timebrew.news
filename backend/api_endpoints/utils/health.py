@@ -1,8 +1,19 @@
 import json
 from datetime import datetime, timezone
-from shared.utils.db import test_db_connection
+from shared.utils.dynamo import table
 from shared.utils.response import create_response
 # from shared.utils.logger import logger
+
+
+def test_db_connection() -> bool:
+    """Lightweight DynamoDB connectivity check (describe the users table)."""
+    print(f"[HEALTH] Testing DynamoDB connectivity")
+    try:
+        table("users").table_status
+        return True
+    except Exception as e:
+        print(f"[HEALTH] ERROR: DynamoDB connectivity check failed: {e}")
+        return False
 
 
 def handler(event, context):

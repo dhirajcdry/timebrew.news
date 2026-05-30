@@ -1,7 +1,8 @@
 import json
 import boto3
 import os
-from shared.utils.db import get_db_connection
+from shared.db.queries import get_user_by_cognito_id, get_brew
+from shared.utils.dynamo import parse_dt, to_int
 from shared.utils.response import create_response
 
 cognito = boto3.client("cognito-idp")
@@ -30,63 +31,37 @@ def handler(event, context):
         if not brew_id:
             return create_response(400, {"error": "Brew ID is required"})
 
-        # Get user ID from database
-        conn = get_db_connection()
         try:
-            with conn.cursor() as cur:
-                # Get user ID from cognito_id
-                cur.execute(
-                    "SELECT id FROM time_brew.users WHERE cognito_id = %s",
-                    (cognito_id,),
-                )
-                user_result = cur.fetchone()
+            # Resolve the user from the cognito_id
+            user = get_user_by_cognito_id(cognito_id)
+            if not user:
+                return create_response(404, {"error": "User not found"})
 
-                if not user_result:
-                    return create_response(404, {"error": "User not found"})
+            # Get specific brew by ID for this user
+            brew_item = get_brew(user["id"], brew_id)
+            if not brew_item:
+                return create_response(404, {"error": "Brew not found"})
 
-                user_id = user_result[0]
+            topics = brew_item.get("topics")
+            if not isinstance(topics, list):
+                topics = []
 
-                # Get specific brew by ID for this user
-                cur.execute(
-                    """SELECT id, name, topics, delivery_time, article_count, created_at, is_active 
-                       FROM time_brew.brews 
-                       WHERE id = %s AND user_id = %s""",
-                    (brew_id, user_id),
-                )
+            created_at = parse_dt(brew_item.get("created_at"))
+            brew = {
+                "id": str(brew_item.get("id")),
+                "name": brew_item.get("name"),
+                "topics": topics,
+                "delivery_time": str(brew_item["delivery_time"]) if brew_item.get("delivery_time") else None,
+                "article_count": to_int(brew_item.get("article_count"), 5),
+                "created_at": created_at.isoformat() + "Z" if created_at else None,
+                "is_active": bool(brew_item.get("is_active", True)),
+            }
 
-                brew_result = cur.fetchone()
-                if not brew_result:
-                    return create_response(404, {"error": "Brew not found"})
-
-                # Parse topics JSON if it exists
-                topics = brew_result[2]
-                if isinstance(topics, str):
-                    try:
-                        topics = json.loads(topics)
-                    except json.JSONDecodeError:
-                        topics = []
-                elif topics is None:
-                    topics = []
-
-                brew = {
-                    "id": str(brew_result[0]),
-                    "name": brew_result[1],
-                    "topics": topics,
-                    "delivery_time": str(brew_result[3]) if brew_result[3] else None,
-                    "article_count": brew_result[4],
-                    "created_at": (
-                        brew_result[5].isoformat() + "Z" if brew_result[5] else None
-                    ),
-                    "is_active": brew_result[6],
-                }
-
-                return create_response(200, {"brew": brew})
+            return create_response(200, {"brew": brew})
 
         except Exception as e:
             print(f"Database error: {e}")
             return create_response(500, {"error": f"Database error: {str(e)}"})
-        finally:
-            conn.close()
 
     except Exception as e:
         print(f"Unexpected error: {e}")

@@ -1,19 +1,21 @@
 import os
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr
 from datetime import datetime, timezone
 import pytz
 import json
-import re
 import time
-import os
-import psycopg2
-from shared.utils.db import get_db_connection
+import boto3
 from shared.utils.response import create_response
 # from shared.utils.logger import Logger  # Replaced with print statements
 from shared.utils.text_utils import format_list_simple
+from shared.db.queries import (
+    get_run,
+    get_editor_log,
+    update_run_stage,
+    update_brew_last_sent,
+    mark_editor_email_sent,
+)
+from shared.utils.dynamo import to_iso
 
 
 def format_email_html(editor_draft, brew_name, current_time):
@@ -105,9 +107,7 @@ def lambda_handler(event, context):
     Reads JSON editor draft from editor_logs, formats to HTML, and sends email
     """
     start_time = time.time()
-    # logger = Logger("email_dispatcher")  # Replaced with print statements
     run_id = None
-    conn = None
 
     try:
         print(f"[EMAIL_DISPATCHER] Email dispatcher started: {event}")
@@ -119,49 +119,24 @@ def lambda_handler(event, context):
 
         print(f"[EMAIL_DISPATCHER] Context set: run_id={run_id}")
 
-        # Get database connection
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        # Retrieve run data and user/brew information
-        cursor.execute(
-            """
-            SELECT rt.run_id, rt.brew_id, rt.user_id, rt.current_stage,
-                b.name, b.topics, b.delivery_time, u.timezone,
-                u.email, u.first_name, u.last_name
-            FROM time_brew.run_tracker rt
-            JOIN time_brew.brews b ON rt.brew_id = b.id
-            JOIN time_brew.users u ON rt.user_id = u.id
-            WHERE rt.run_id = %s
-        """,
-            (run_id,),
-        )
-
-        run_data = cursor.fetchone()
-        if not run_data:
+        # Retrieve run data (with denormalized user/brew snapshot)
+        run = get_run(run_id)
+        if not run:
             print(f"[EMAIL_DISPATCHER] ERROR: Run not found in database")
-            cursor.close()
-            conn.close()
             return create_response(404, {"error": "Run not found"})
 
-        (
-            run_id,
-            brew_id,
-            user_id,
-            stage,
-            brew_name,
-            topics,
-            delivery_time,
-            brew_timezone,
-            email,
-            first_name,
-            last_name,
-        ) = run_data
+        brew_id = run.get("brew_id")
+        user_id = run.get("user_id")
+        stage = run.get("current_stage")
+        brew_name = run.get("brew_name")
+        topics = run.get("topics")
+        brew_timezone = run.get("timezone") or "UTC"
+        email = run.get("email")
+        first_name = run.get("first_name")
+        last_name = run.get("last_name")
 
         if stage != "dispatcher":
             print(f"[EMAIL_DISPATCHER] ERROR: Invalid run stage: {stage}, expected dispatcher")
-            cursor.close()
-            conn.close()
             return create_response(
                 400,
                 {"error": f"Run stage is {stage}, expected dispatcher"},
@@ -170,37 +145,15 @@ def lambda_handler(event, context):
         # Get editor draft from editor_logs
         print(f"[EMAIL_DISPATCHER] Retrieving editor draft from editor logs")
         try:
-            cursor.execute(
-                """
-                SELECT id, prompt_used, editorial_content, raw_llm_response, email_sent, 
-                       email_sent_time, runtime_ms, created_at
-                FROM time_brew.editor_logs 
-                WHERE run_id = %s
-                """,
-                (run_id,),
-            )
-            row = cursor.fetchone()
-            if not row:
+            editor_log = get_editor_log(run_id)
+            if not editor_log:
                 print(f"[EMAIL_DISPATCHER] ERROR: Editor log not found")
-                cursor.close()
-                conn.close()
                 return create_response(404, {"error": "Editor log not found"})
-
-            editor_log = {
-                "id": str(row[0]),
-                "prompt_used": row[1],
-                "editorial_content": row[2],
-                "raw_llm_response": row[3],
-                "email_sent": row[4],
-                "email_sent_time": row[5],
-                "runtime_ms": row[6],
-                "created_at": row[7],
-            }
 
             # Use editorial_content if available, fallback to raw_llm_response
             editorial_content = editor_log.get("editorial_content")
             raw_llm_response = editor_log.get("raw_llm_response")
-            
+
             if editorial_content:
                 # editorial_content is already parsed JSON
                 editor_draft = editorial_content
@@ -213,19 +166,13 @@ def lambda_handler(event, context):
                         editor_draft = raw_llm_response
                 except json.JSONDecodeError as e:
                     print(f"[EMAIL_DISPATCHER] ERROR: Failed to parse raw_llm_response: {str(e)}")
-                    cursor.close()
-                    conn.close()
                     return create_response(400, {"error": "Invalid editor draft content"})
             else:
                 print(f"[EMAIL_DISPATCHER] ERROR: Missing editor draft content in editor logs")
-                cursor.close()
-                conn.close()
                 return create_response(400, {"error": "Missing editor draft content"})
 
         except Exception as e:
             print(f"[EMAIL_DISPATCHER] ERROR: Failed to retrieve editor log: {str(e)}")
-            cursor.close()
-            conn.close()
             return create_response(500, {"error": "Failed to retrieve editor draft"})
 
         # editor_draft is already parsed from editorial_content or raw_llm_response above
@@ -264,106 +211,58 @@ def lambda_handler(event, context):
 
         except Exception as e:
             print(f"[EMAIL_DISPATCHER] ERROR: Error formatting email content: {str(e)}")
-            cursor.close()
-            conn.close()
             return create_response(500, {"error": "Failed to format email content"})
 
-        # Get SMTP configuration from environment
-        smtp_server = os.environ.get("SMTP_SERVER")
-        smtp_port = int(os.environ.get("SMTP_PORT", 587))
-        smtp_username = os.environ.get("SMTP_USERNAME")
-        smtp_password = os.environ.get("SMTP_PASSWORD")
+        # Amazon SES configuration
+        ses_region = os.environ.get("SES_REGION", os.environ.get("AWS_REGION", "us-east-1"))
+        from_email = os.environ.get("SES_FROM_EMAIL", "no-reply@timebrew.news")
+        from_name = os.environ.get("SES_FROM_NAME", "TimeBrew")
+        source = formataddr((from_name, from_email))
 
-        if not all([smtp_server, smtp_username, smtp_password]):
-            print(f"[EMAIL_DISPATCHER] ERROR: SMTP configuration incomplete: has_server={bool(smtp_server)}, has_username={bool(smtp_username)}, has_password={bool(smtp_password)}")
-            raise Exception("SMTP configuration incomplete")
-
-        FROM_ADDRESS = ("News Briefings", "no-reply@inspireinbox.com")
-
-        # Create email message
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject_line  # Using subject from editor_draft JSON
-        msg["From"] = formataddr(FROM_ADDRESS)
-        msg["To"] = email
-
-        html_part = MIMEText(html_content, "html")
-
-        msg.attach(html_part)
-
-        # Send email
-        print(f"[EMAIL_DISPATCHER] Attempting to send email: smtp_server={smtp_server}, smtp_port={smtp_port}, recipient={email}, subject_line={subject_line[:50]}")
+        # Send email via SES
+        print(f"[EMAIL_DISPATCHER] Attempting to send email via SES: from={from_email}, recipient={email}, subject_line={subject_line[:50] if subject_line else ''}")
 
         try:
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(smtp_username, smtp_password)
-                server.sendmail(FROM_ADDRESS[1], email, msg.as_string())
+            ses = boto3.client("ses", region_name=ses_region)
+            ses.send_email(
+                Source=source,
+                Destination={"ToAddresses": [email]},
+                Message={
+                    "Subject": {"Data": subject_line or f"Your {brew_name}", "Charset": "UTF-8"},
+                    "Body": {"Html": {"Data": html_content, "Charset": "UTF-8"}},
+                },
+            )
 
             delivery_status = "dispatched"
             error_message = None
             print(f"[EMAIL_DISPATCHER] Email sent successfully")
 
         except Exception as e:
-            print(f"[EMAIL_DISPATCHER] ERROR: SMTP Error: {str(e)}, smtp_server={smtp_server}, smtp_port={smtp_port}, error_type={type(e).__name__}")
+            print(f"[EMAIL_DISPATCHER] ERROR: SES Error: {str(e)}, from={from_email}, error_type={type(e).__name__}")
             delivery_status = "failed"
             error_message = str(e)
             raise e
 
         # Get current time in user's timezone
         sent_at = current_time
-        sent_at_utc = sent_at.astimezone(pytz.UTC).replace(tzinfo=None)
+        sent_at_iso = to_iso(sent_at)
 
-        # Update run_tracker with delivery status
+        # Update tracking records with delivery status
         try:
             if delivery_status == "dispatched":
-                cursor.execute(
-                    """
-                    UPDATE time_brew.run_tracker 
-                    SET current_stage = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE run_id = %s
-                    """,
-                    ("completed", run_id),
-                )
-
-                # Update brew's last_sent_date if email was sent successfully
-                cursor.execute(
-                    """
-                    UPDATE time_brew.brews 
-                    SET last_sent_date = %s
-                    WHERE id = %s
-                """,
-                    (sent_at_utc, brew_id),
-                )
-
-                # Update editor_logs with email sent status and time
-                cursor.execute(
-                    """
-                    UPDATE time_brew.editor_logs 
-                    SET email_sent = true, email_sent_time = %s
-                    WHERE run_id = %s
-                    """,
-                    (sent_at_utc, run_id),
-                )
+                update_run_stage(run_id, "completed")
+                # Record last-sent on the brew (also bumps briefings_sent counter)
+                update_brew_last_sent(user_id, brew_id, sent_at_iso)
+                # Flag the editor log as sent
+                mark_editor_email_sent(run_id, sent_at_iso)
             else:
-                cursor.execute(
-                    """
-                    UPDATE time_brew.run_tracker 
-                    SET current_stage = %s, failed_stage = %s, error_message = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE run_id = %s
-                    """,
-                    ("failed", "dispatcher", str(e), run_id),
-                )
+                update_run_stage(run_id, "failed", failed_stage="dispatcher", error_message=error_message)
 
-            conn.commit()
             print(f"[EMAIL_DISPATCHER] Updated run tracker and brew data: run_id={run_id}, stage={'completed' if delivery_status == 'dispatched' else 'failed'}")
 
         except Exception as update_error:
             print(f"[EMAIL_DISPATCHER] ERROR: Failed to update run tracker: {str(update_error)}")
-            conn.rollback()
             raise Exception(f"Failed to update run status: {str(update_error)}")
-        finally:
-            cursor.close()
-            conn.close()
 
         # Calculate processing time
         end_time = time.time()
@@ -405,40 +304,9 @@ def lambda_handler(event, context):
 
         # Try to update run_tracker status to failed if we have run_id
         try:
-            if run_id and "cursor" not in locals():
+            if run_id:
                 print(f"[EMAIL_DISPATCHER] Updating run tracker status to failed")
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    UPDATE time_brew.run_tracker 
-                    SET current_stage = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE run_id = %s
-                    """,
-                    ("failed", run_id),
-                )
-                conn.commit()
-                cursor.close()
-                conn.close()
-            elif run_id and "cursor" in locals():
-                # If we already have a cursor, use it
-                try:
-                    cursor.execute(
-                        """
-                        UPDATE time_brew.run_tracker 
-                        SET current_stage = %s, failed_stage = %s, error_message = %s, updated_at = CURRENT_TIMESTAMP
-                        WHERE run_id = %s
-                        """,
-                        ("failed", "dispatcher", str(e), run_id),
-                    )
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-                finally:
-                    if cursor:
-                        cursor.close()
-                    if conn:
-                        conn.close()
+                update_run_stage(run_id, "failed", failed_stage="dispatcher", error_message=str(e))
         except Exception as db_error:
             print(f"[EMAIL_DISPATCHER] ERROR: Failed to update run tracker status: {str(db_error)}")
 

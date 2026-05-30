@@ -3,7 +3,7 @@ import boto3
 import os
 import uuid
 import json
-from shared.utils.db import get_db_connection
+from shared.db.queries import create_user
 from shared.utils.response import create_response
 # from shared.utils.logger import logger  # Replaced with print statements
 
@@ -100,31 +100,17 @@ def handler(event, context):
             print(f"[REGISTER] ERROR: Cognito error during registration for {email}: {e}")
             return create_response(500, {"error": "Failed to create user account"})
 
-        # Store user profile in database
+        # Store user profile in DynamoDB
         try:
-            conn = get_db_connection()
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO time_brew.users (cognito_id, email, first_name, last_name, country, interests, timezone)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id, created_at
-                """,
-                    (
-                        cognito_id,
-                        email,
-                        first_name,
-                        last_name,
-                        country,
-                        interests,
-                        timezone,
-                    ),
-                )
-
-                user_id, created_at = cur.fetchone()
-
-            conn.commit()
-            conn.close()
+            user_id, created_at = create_user(
+                cognito_id=cognito_id,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                country=country,
+                interests=interests,
+                timezone=timezone,
+            )
             print(f"[REGISTER] User profile created in database for {email} with ID: {user_id}")
 
         except Exception as e:

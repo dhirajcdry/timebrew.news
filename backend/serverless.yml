@@ -1,17 +1,28 @@
 service: timebrew-backend
 
+useDotenv: true
+
 custom:
   validatedStage: ${self:custom.stages.${opt:stage, 'dev'}, 'dev'}
   stages:
     dev: dev
     prod: prod
   pythonRequirements:
+    # openai -> pydantic-core ships a native wheel, so build Linux wheels in Docker
     dockerizePip: true
     pythonBin: python3
+  # Central place for the DynamoDB table names (referenced by env + resources)
+  tables:
+    users: ${self:service}-users-${self:provider.stage}
+    brews: ${self:service}-brews-${self:provider.stage}
+    runTracker: ${self:service}-run-tracker-${self:provider.stage}
+    curatorLogs: ${self:service}-curator-logs-${self:provider.stage}
+    editorLogs: ${self:service}-editor-logs-${self:provider.stage}
+    userFeedback: ${self:service}-user-feedback-${self:provider.stage}
 
 provider:
   name: aws
-  runtime: python3.9
+  runtime: python3.12
   region: us-east-1
   stage: ${self:custom.validatedStage}
   httpApi:
@@ -30,20 +41,23 @@ provider:
         - OPTIONS
       maxAge: 86400
   environment:
-    USER_POOL_ID: ${env:USER_POOL_ID}
-    CLIENT_ID: ${env:CLIENT_ID}
-    DB_HOST: ${env:DB_HOST}
-    DB_PORT: ${env:DB_PORT}
-    DB_NAME: ${env:DB_NAME}
-    DB_USER: ${env:DB_USER}
-    DB_PASSWORD: ${env:DB_PASSWORD}
-    SMTP_SERVER: ${env:SMTP_SERVER}
-    SMTP_PORT: ${env:SMTP_PORT}
-    SMTP_USERNAME: ${env:SMTP_USERNAME}
-    SMTP_PASSWORD: ${env:SMTP_PASSWORD}
-    PERPLEXITY_API_KEY: ${env:PERPLEXITY_API_KEY}
-    OPENAI_API_KEY: ${env:OPENAI_API_KEY}
-    STAGE: ${env:STAGE}
+    STAGE: ${self:provider.stage}
+    # Auth (Cognito provisioned in resources below)
+    USER_POOL_ID: !Ref CognitoUserPool
+    CLIENT_ID: !Ref CognitoUserPoolClient
+    # AI (OpenRouter only) — key supplied via gitignored backend/.env at deploy time
+    OPENROUTER_API_KEY: ${env:OPENROUTER_API_KEY, ''}
+    # Email (Amazon SES)
+    SES_FROM_EMAIL: ${env:SES_FROM_EMAIL, 'no-reply@timebrew.news'}
+    SES_FROM_NAME: ${env:SES_FROM_NAME, 'TimeBrew'}
+    SES_REGION: ${self:provider.region}
+    # DynamoDB table names
+    USERS_TABLE: ${self:custom.tables.users}
+    BREWS_TABLE: ${self:custom.tables.brews}
+    RUN_TRACKER_TABLE: ${self:custom.tables.runTracker}
+    CURATOR_LOGS_TABLE: ${self:custom.tables.curatorLogs}
+    EDITOR_LOGS_TABLE: ${self:custom.tables.editorLogs}
+    USER_FEEDBACK_TABLE: ${self:custom.tables.userFeedback}
 
   iam:
     role:
@@ -62,6 +76,25 @@ provider:
           Action:
             - lambda:InvokeFunction
           Resource: "*"
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+          Resource: "*"
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:BatchGetItem
+            - dynamodb:BatchWriteItem
+            - dynamodb:DescribeTable
+          Resource:
+            - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/${self:service}-*
+            - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/${self:service}-*/index/*
 
 plugins:
   - serverless-python-requirements
@@ -245,6 +278,253 @@ functions:
 
 resources:
   Resources:
+    # =========================================================================
+    # DynamoDB Tables (on-demand / PAY_PER_REQUEST)
+    # =========================================================================
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tables.users}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: cognito_id
+            AttributeType: S
+          - AttributeName: email
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: cognito_id-index
+            KeySchema:
+              - AttributeName: cognito_id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+          - IndexName: email-index
+            KeySchema:
+              - AttributeName: email
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+
+    BrewsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tables.brews}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: active_flag
+            AttributeType: S
+          - AttributeName: delivery_time
+            AttributeType: S
+        KeySchema:
+          - AttributeName: user_id
+            KeyType: HASH
+          - AttributeName: id
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: id-index
+            KeySchema:
+              - AttributeName: id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+          - IndexName: active-index
+            KeySchema:
+              - AttributeName: active_flag
+                KeyType: HASH
+              - AttributeName: delivery_time
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    RunTrackerTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tables.runTracker}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: run_id
+            AttributeType: S
+          - AttributeName: brew_id
+            AttributeType: S
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: created_at
+            AttributeType: S
+        KeySchema:
+          - AttributeName: run_id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: brew-index
+            KeySchema:
+              - AttributeName: brew_id
+                KeyType: HASH
+              - AttributeName: created_at
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+          - IndexName: user-index
+            KeySchema:
+              - AttributeName: user_id
+                KeyType: HASH
+              - AttributeName: created_at
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    CuratorLogsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tables.curatorLogs}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: run_id
+            AttributeType: S
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: created_at
+            AttributeType: S
+        KeySchema:
+          - AttributeName: run_id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: user-index
+            KeySchema:
+              - AttributeName: user_id
+                KeyType: HASH
+              - AttributeName: created_at
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    EditorLogsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tables.editorLogs}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: run_id
+            AttributeType: S
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: user_brew
+            AttributeType: S
+          - AttributeName: brew_id
+            AttributeType: S
+          - AttributeName: created_at
+            AttributeType: S
+        KeySchema:
+          - AttributeName: run_id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: editorial-index
+            KeySchema:
+              - AttributeName: id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+          - IndexName: userbrew-index
+            KeySchema:
+              - AttributeName: user_brew
+                KeyType: HASH
+              - AttributeName: created_at
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+          - IndexName: brew-index
+            KeySchema:
+              - AttributeName: brew_id
+                KeyType: HASH
+              - AttributeName: created_at
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    UserFeedbackTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tables.userFeedback}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: editorial_id
+            AttributeType: S
+          - AttributeName: sk
+            AttributeType: S
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: created_at
+            AttributeType: S
+        KeySchema:
+          - AttributeName: editorial_id
+            KeyType: HASH
+          - AttributeName: sk
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: user-index
+            KeySchema:
+              - AttributeName: user_id
+                KeyType: HASH
+              - AttributeName: created_at
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    # =========================================================================
+    # Cognito (provisioned fresh in this account)
+    # =========================================================================
+    CognitoUserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: ${self:service}-users-${self:provider.stage}
+        UsernameAttributes:
+          - email
+        AutoVerifiedAttributes:
+          - email
+        Schema:
+          - Name: email
+            AttributeDataType: String
+            Required: true
+            Mutable: true
+          - Name: given_name
+            AttributeDataType: String
+            Required: false
+            Mutable: true
+          - Name: family_name
+            AttributeDataType: String
+            Required: false
+            Mutable: true
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 8
+            RequireUppercase: true
+            RequireLowercase: true
+            RequireNumbers: true
+            RequireSymbols: true
+        AccountRecoverySetting:
+          RecoveryMechanisms:
+            - Name: verified_email
+              Priority: 1
+
+    CognitoUserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: ${self:service}-web-${self:provider.stage}
+        UserPoolId: !Ref CognitoUserPool
+        GenerateSecret: false
+        ExplicitAuthFlows:
+          - ALLOW_USER_SRP_AUTH
+          - ALLOW_USER_PASSWORD_AUTH
+          - ALLOW_REFRESH_TOKEN_AUTH
+        PreventUserExistenceErrors: ENABLED
+
     # Step Functions State Machine for AI Pipeline
     AIPipelineStateMachine:
       Type: AWS::StepFunctions::StateMachine
@@ -385,3 +665,11 @@ resources:
       Value: !Ref AIPipelineStateMachine
       Export:
         Name: ${self:service}-ai-pipeline-${self:provider.stage}
+
+    CognitoUserPoolId:
+      Description: "Cognito User Pool ID (set VITE_COGNITO_USER_POOL_ID in the frontend)"
+      Value: !Ref CognitoUserPool
+
+    CognitoUserPoolClientId:
+      Description: "Cognito User Pool Client ID (set VITE_COGNITO_CLIENT_ID in the frontend)"
+      Value: !Ref CognitoUserPoolClient

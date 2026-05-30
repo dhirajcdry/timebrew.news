@@ -1,5 +1,5 @@
 from shared.base import BaseHandler
-from shared.db.queries import OptimizedQueries
+from shared.db.queries import OptimizedQueries, get_curator_log
 
 
 class BriefingByIdHandler(BaseHandler):
@@ -63,16 +63,10 @@ class BriefingByIdHandler(BaseHandler):
                 briefing["editor_draft"] = editorial_content
             
             if include_articles:
-                # This could be optimized further by adding to the main query
-                from shared.utils.db import get_db_connection
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT raw_articles FROM time_brew.curator_logs WHERE run_id = %s", (run_id,))
-                articles_result = cursor.fetchone()
-                conn.close()
-                
-                if articles_result and articles_result[0]:
-                    articles = articles_result[0]
+                curator_log = get_curator_log(run_id)
+                articles = curator_log.get("raw_articles") if curator_log else None
+
+                if articles:
                     for i, article in enumerate(articles):
                         article["position"] = i + 1
                     briefing["articles"] = articles

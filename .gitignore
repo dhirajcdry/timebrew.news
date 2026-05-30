@@ -46,3 +46,6 @@ __pycache__/
 .DS_Store
 
 texts.txt
+
+# Claude Code local
+.claude/

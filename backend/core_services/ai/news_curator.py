@@ -1,28 +1,34 @@
 import os
 import json
 import time
-import os
-import psycopg2
 from datetime import datetime, timedelta, timezone
 import pytz
-from shared.utils.db import get_db_connection
 from shared.utils.response import create_response
 # from shared.utils.logger import logger  # Replaced with print statements
 from shared.utils.ai_service import ai_service
 from shared.utils.text_utils import format_list_with_quotes
 from shared.utils.other_utils import format_time_ampm
+from shared.db.queries import (
+    get_run,
+    get_brew_by_id,
+    update_run_stage,
+    create_curator_log,
+    update_curator_log,
+    list_recent_curator_articles_for_user,
+    list_recent_feedback_for_user,
+)
+from shared.utils.dynamo import parse_dt
 
 
 def lambda_handler(event, context):
     """
     News Curator Lambda Function
-    Collects articles from AI and stores them in the new curator_logs table
+    Collects articles from AI and stores them in the curator_logs table (DynamoDB)
     """
     start_time = time.time()  # Use time.time() for precise millisecond calculation
     print(f"[NEWS_CURATOR] Request started: {event.get('brew_id', 'unknown')}")
 
     run_id = None
-    conn = None
 
     try:
         # Extract and validate required parameters from event
@@ -39,105 +45,45 @@ def lambda_handler(event, context):
 
         print(f"[NEWS_CURATOR] Context set: brew_id={brew_id}, run_id={run_id}")
 
-        # Get database connection
-        print(f"[NEWS_CURATOR] Connecting to database for brew data retrieval")
-        db_start_time = datetime.now(timezone.utc)
+        # Validate that run_tracker exists and is in correct stage
+        print(f"[NEWS_CURATOR] Validating run tracker state")
+        run = get_run(run_id)
+        if not run or run.get("brew_id") != brew_id:
+            print(f"[NEWS_CURATOR] ERROR: Run tracker not found: run_id={run_id}, brew_id={brew_id}")
+            return create_response(400, {"error": "Invalid run_id or brew_id"})
 
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            db_connect_duration = (
-                datetime.now(timezone.utc) - db_start_time
-            ).total_seconds() * 1000
-            print(f"[NEWS_CURATOR] DB connection time: {db_connect_duration}ms")
-        except Exception as e:
-            print(f"[NEWS_CURATOR] ERROR: Failed to connect to database: {str(e)}")
-            return create_response(500, {"error": "Database connection failed"})
+        current_stage = run.get("current_stage")
+        if current_stage != "curator":
+            print(f"[NEWS_CURATOR] ERROR: Invalid run tracker stage: current={current_stage}, expected=curator")
+            return create_response(400, {"error": f"Invalid stage: {current_stage}, expected: curator"})
+        print(f"[NEWS_CURATOR] Run tracker validation successful: stage={current_stage}")
 
-        # Retrieve brew and user data
-        print(f"[NEWS_CURATOR] Retrieving brew and user data")
-        query_start_time = datetime.now(timezone.utc)
-
-        cursor.execute(
-            """
-            SELECT b.id, b.user_id, b.name, b.topics, b.delivery_time, 
-                u.timezone, b.last_sent_date,
-                u.email, u.first_name, u.last_name
-            FROM time_brew.brews b
-            JOIN time_brew.users u ON b.user_id = u.id
-            WHERE b.id = %s AND b.is_active = true
-        """,
-            (brew_id,),
-        )
-
-        brew_data = cursor.fetchone()
-        query_duration = (
-            datetime.now(timezone.utc) - query_start_time
-        ).total_seconds() * 1000
-        print(f"[NEWS_CURATOR] Brew query time: {query_duration}ms")
-
-        if not brew_data:
+        # Retrieve brew data (for active check + last_sent_date); user fields come
+        # from the run snapshot.
+        brew = get_brew_by_id(brew_id)
+        if not brew or not brew.get("is_active", True):
             print(f"[NEWS_CURATOR] WARNING: Active brew not found for provided brew_id")
-            cursor.close()
-            conn.close()
             return create_response(404, {"error": "Active brew not found"})
 
-        (
-            brew_id,
-            user_id,
-            brew_name,
-            topics,
-            delivery_time,
-            brew_timezone,
-            last_sent_date,
-            email,
-            first_name,
-            last_name,
-        ) = brew_data
+        user_id = run.get("user_id")
+        brew_name = run.get("brew_name") or brew.get("name")
+        topics = run.get("topics") if run.get("topics") is not None else brew.get("topics")
+        delivery_time_raw = run.get("delivery_time") or brew.get("delivery_time")
+        brew_timezone = run.get("timezone") or "UTC"
+        email = run.get("email")
+        first_name = run.get("first_name") or ""
+        last_name = run.get("last_name") or ""
+        last_sent_date = parse_dt(brew.get("last_sent_date"))
 
         print(f"[NEWS_CURATOR] Context updated: user_id={user_id}, email={email}, run_id={run_id}")
 
-        # Validate that run_tracker exists and is in correct stage
-        print(f"[NEWS_CURATOR] Validating run tracker state")
-        try:
-            cursor.execute(
-                """
-                SELECT current_stage FROM time_brew.run_tracker 
-                WHERE run_id = %s AND brew_id = %s
-                """,
-                (run_id, brew_id),
-            )
-            result = cursor.fetchone()
-            if not result:
-                print(f"[NEWS_CURATOR] ERROR: Run tracker not found: run_id={run_id}, brew_id={brew_id}")
-                cursor.close()
-                conn.close()
-                return create_response(400, {"error": "Invalid run_id or brew_id"})
-
-            current_stage = result[0]
-            if current_stage != "curator":
-                print(f"[NEWS_CURATOR] ERROR: Invalid run tracker stage: current={current_stage}, expected=curator")
-                cursor.close()
-                conn.close()
-                return create_response(
-                    400, {"error": f"Invalid stage: {current_stage}, expected: curator"}
-                )
-
-            print(f"[NEWS_CURATOR] Run tracker validation successful: stage={current_stage}")
-        except Exception as e:
-            print(f"[NEWS_CURATOR] ERROR: Failed to validate run tracker: {str(e)}")
-            cursor.close()
-            conn.close()
-            return create_response(500, {"error": "Failed to validate run tracker"})
-
-        delivery_time = format_time_ampm(str(delivery_time))
-
-        user_name = f"{first_name} {last_name}"
+        delivery_time = format_time_ampm(str(delivery_time_raw))
+        user_name = f"{first_name} {last_name}".strip()
 
         user_tz = pytz.timezone(brew_timezone)
         now = datetime.now(user_tz)
 
-        # Parse topics JSON
+        # Parse topics
         if isinstance(topics, str):
             try:
                 topics_list = json.loads(topics)
@@ -154,89 +100,40 @@ def lambda_handler(event, context):
 
         # Calculate temporal context - database dates are UTC, convert to user timezone
         if last_sent_date:
-            # Database datetime is UTC, convert directly to user timezone
-            last_sent_user_tz = last_sent_date.replace(tzinfo=pytz.UTC).astimezone(
-                user_tz
-            )
+            last_sent_user_tz = last_sent_date.replace(tzinfo=pytz.UTC).astimezone(user_tz)
             temporal_context = f"{last_sent_user_tz.strftime('%Y-%m-%d %H:%M %Z')} to {now.strftime('%Y-%m-%d %H:%M %Z')}"
         else:
             temporal_context = "past 3 days"
 
         # Get previous articles for context (avoid duplicates)
         print(f"[NEWS_CURATOR] Retrieving previous articles for context")
-        prev_articles_start_time = datetime.now(timezone.utc)
-
-        cursor.execute(
-            """
-            SELECT cl.raw_articles, rt.updated_at
-            FROM time_brew.run_tracker rt
-            JOIN time_brew.curator_logs cl ON rt.run_id = cl.run_id
-            WHERE rt.user_id = %s AND rt.current_stage = 'completed' AND rt.updated_at IS NOT NULL
-            ORDER BY rt.updated_at DESC
-            LIMIT 5
-            """,
-            (user_id,),
-        )
-
-        prev_articles_duration = (
-            datetime.now(timezone.utc) - prev_articles_start_time
-        ).total_seconds() * 1000
-        print(f"[NEWS_CURATOR] Previous articles query time: {prev_articles_duration}ms")
-
-        # Process previous articles and build NO-GO LIST in one pass
         previous_articles = []
         no_go_items = []
 
-        for row in cursor.fetchall():
-            raw_articles, sent_at = row
-            if raw_articles:
-                if isinstance(raw_articles, str):
-                    articles_data = json.loads(raw_articles)
-                else:
-                    articles_data = raw_articles
+        for articles_data, sent_at in list_recent_curator_articles_for_user(user_id, limit=5):
+            if not articles_data:
+                continue
+            if isinstance(articles_data, str):
+                articles_data = json.loads(articles_data)
 
-                for article in articles_data:
-                    headline = article.get("headline", "")
-                    url = article.get("url", "")
-                    sent_date = sent_at.strftime("%Y-%m-%d") if sent_at else "Unknown"
-                    source = article.get("source", "")
+            for article in articles_data:
+                headline = article.get("headline", "")
+                url = article.get("url", "")
+                sent_date = sent_at.strftime("%Y-%m-%d") if sent_at else "Unknown"
+                source = article.get("source", "")
 
-                    # Add to previous articles list
-                    previous_articles.append(
-                        {
-                            "headline": headline,
-                            "url": url,
-                            "sent_date": sent_date,
-                            "source": source,
-                        }
-                    )
-
-                    # Add to no-go items
-                    no_go_items.append(f'"{headline} ({url})"')
+                previous_articles.append({
+                    "headline": headline,
+                    "url": url,
+                    "sent_date": sent_date,
+                    "source": source,
+                })
+                no_go_items.append(f'"{headline} ({url})"')
 
         # Get user feedback for personalization
         print(f"[NEWS_CURATOR] Retrieving user feedback for personalization")
-        feedback_start_time = datetime.now(timezone.utc)
-
-        cursor.execute(
-            """
-            SELECT f.feedback_type, f.article_position
-            FROM time_brew.user_feedback f
-            WHERE f.user_id = %s
-            ORDER BY f.created_at DESC
-            LIMIT 10
-        """,
-            (user_id,),
-        )
-
-        feedback_duration = (
-            datetime.now(timezone.utc) - feedback_start_time
-        ).total_seconds() * 1000
-        print(f"[NEWS_CURATOR] Feedback query time: {feedback_duration}ms")
-
         user_feedback = []
-        for row in cursor.fetchall():
-            feedback_type, article_position = row
+        for feedback_type, article_position in list_recent_feedback_for_user(user_id, limit=10):
             feedback_entry = {"type": feedback_type}
             if article_position:
                 feedback_entry["article_position"] = article_position
@@ -268,7 +165,7 @@ Return **3–8** distinct news stories for "{brew_name}" briefing that focuses o
 
 # DIVERSITY RULES (MUST)
 1. Max one story per company / organization.
-2. Use at least 3 different reputable publishers.  
+2. Use at least 3 different reputable publishers.
 3. Cover user's interests and topics.
 4. No duplicate events or announcements.
 
@@ -331,15 +228,11 @@ BEGIN JSON:"""
                 timeout=60,
             )
             content = ai_response_data["content"]
-            api_duration = (
-                datetime.now(timezone.utc) - api_start_time
-            ).total_seconds() * 1000
+            api_duration = (datetime.now(timezone.utc) - api_start_time).total_seconds() * 1000
 
             print(f"[NEWS_CURATOR] {provider.title()} API call completed in {api_duration}ms")
         except Exception as e:
-            api_duration = (
-                datetime.now(timezone.utc) - api_start_time
-            ).total_seconds() * 1000
+            api_duration = (datetime.now(timezone.utc) - api_start_time).total_seconds() * 1000
             print(f"[NEWS_CURATOR] ERROR: {provider.title()} API request failed: {str(e)}, duration: {api_duration}ms")
             raise Exception(f"{provider.title()} API error: {str(e)}")
 
@@ -353,39 +246,23 @@ BEGIN JSON:"""
         # Log raw LLM response immediately to ensure we have it even if parsing fails
         print(f"[NEWS_CURATOR] Logging raw LLM response to curator logs")
         try:
-            cursor.execute(
-                """
-                INSERT INTO time_brew.curator_logs 
-                (run_id, raw_articles, topics_searched, search_timeframe, article_count, 
-                 prompt_used, raw_llm_response, curator_notes, user_id, runtime_ms)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-                """,
-                (
-                    run_id,
-                    json.dumps([]),
-                    topics_list,
-                    None,
-                    0,
-                    prompt,
-                    content,
-                    "",  # curator_notes will be updated after parsing
-                    user_id,
-                    curator_runtime_ms,
-                ),
+            log_id = create_curator_log(
+                run_id=run_id,
+                user_id=user_id,
+                raw_articles=[],
+                topics_searched=topics_list,
+                article_count=0,
+                prompt_used=prompt,
+                raw_llm_response=content,
+                curator_notes="",
+                runtime_ms=curator_runtime_ms,
             )
-            log_id = str(cursor.fetchone()[0])
-            conn.commit()
             print(
                 f"[NEWS_CURATOR] Raw LLM response successfully logged to curator logs: run_id={run_id}, log_id={log_id}, runtime_ms={curator_runtime_ms}"
             )
         except Exception as log_error:
-            print(
-                f"[NEWS_CURATOR] ERROR: Failed to log raw LLM response to curator logs: {str(log_error)}"
-            )
-            raise Exception(
-                f"Critical failure: Unable to log raw LLM response to database: {str(log_error)}"
-            )
+            print(f"[NEWS_CURATOR] ERROR: Failed to log raw LLM response to curator logs: {str(log_error)}")
+            raise Exception(f"Critical failure: Unable to log raw LLM response to database: {str(log_error)}")
 
         # Parse AI response
         print(f"[NEWS_CURATOR] Parsing articles from AI response")
@@ -408,50 +285,18 @@ BEGIN JSON:"""
         final_runtime_ms = int((time.time() - start_time) * 1000)
 
         try:
-            # Update the curator log with final data
-            cursor.execute(
-                """
-                UPDATE time_brew.curator_logs 
-                SET raw_articles = %s, curator_notes = %s, runtime_ms = %s
-                WHERE run_id = %s
-            """,
-                (
-                    json.dumps(articles),
-                    curator_notes,
-                    final_runtime_ms,
-                    run_id,
-                ),
-            )
-
-            # Update run tracker to editor stage
-            cursor.execute(
-                """
-                UPDATE time_brew.run_tracker 
-                SET current_stage = %s, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
-                WHERE run_id = %s
-                """,
-                ("editor", run_id),
-            )
-
-            # Commit transaction
-            conn.commit()
-
+            update_curator_log(run_id, articles, curator_notes, final_runtime_ms)
+            # Advance run tracker to editor stage
+            update_run_stage(run_id, "editor")
             print(
                 f"[NEWS_CURATOR] Curator log updated successfully: run_id={run_id}, articles_stored={len(articles)}, final_runtime_ms={final_runtime_ms}"
             )
-
         except Exception as update_error:
             print(f"[NEWS_CURATOR] ERROR: Failed to update curator log: {str(update_error)}")
-            raise Exception(
-                f"Critical failure: Unable to update curator log: {str(update_error)}"
-            )
-
-        cursor.close()
-        conn.close()
+            raise Exception(f"Critical failure: Unable to update curator log: {str(update_error)}")
 
         # Calculate processing time
-        end_time = time.time()
-        processing_time = end_time - start_time
+        processing_time = time.time() - start_time
 
         print(
             f"[NEWS_CURATOR] News collection completed successfully: run_id={run_id}, processing_time_seconds={round(processing_time, 2)}, articles_collected={len(articles)}, curator_notes={curator_notes}, temporal_context={temporal_context}, topics={topics_list}"
@@ -480,41 +325,13 @@ BEGIN JSON:"""
         # Update run tracker to failed state if we have a run_id
         if run_id:
             try:
-                # Create new connection for error handling since main connection may be corrupted
-                error_conn = get_db_connection()
-                error_cursor = error_conn.cursor()
-
-                # Set failed_stage to 'curator' since this handler failed
-                error_cursor.execute(
-                    """
-                    UPDATE time_brew.run_tracker 
-                    SET current_stage = %s, failed_stage = %s, error_message = %s, 
-                        updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
-                    WHERE run_id = %s
-                    """,
-                    ("failed", "curator", str(e), run_id),
-                )
-                error_conn.commit()
-                error_cursor.close()
-                error_conn.close()
+                update_run_stage(run_id, "failed", failed_stage="curator", error_message=str(e))
                 print(f"[NEWS_CURATOR] Run tracker updated to failed state: run_id={run_id}")
             except Exception as stage_error:
-                print(
-                    f"[NEWS_CURATOR] ERROR: Failed to update run tracker to failed state: {str(stage_error)}"
-                )
-
-        # Cleanup database connection on error
-        try:
-            if conn:
-                conn.rollback()
-                conn.close()
-                print(f"[NEWS_CURATOR] Database connection rolled back and closed due to error")
-        except Exception as cleanup_error:
-            print(f"[NEWS_CURATOR] ERROR: Failed to cleanup database connection: {str(cleanup_error)}")
+                print(f"[NEWS_CURATOR] ERROR: Failed to update run tracker to failed state: {str(stage_error)}")
 
         # Calculate processing time for failed request
-        end_time = time.time()
-        processing_time = end_time - start_time
+        processing_time = time.time() - start_time
         print(f"[NEWS_CURATOR] Request failed: ai/news_curator, status=500, duration={processing_time * 1000}ms")
 
         raise e

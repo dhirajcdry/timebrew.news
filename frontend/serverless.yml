@@ -5,13 +5,45 @@ provider:
   region: us-east-1
   stage: prod
 
+custom:
+  domainName: timebrew.news
+  # S3 bucket names are globally unique; suffix with the account id to avoid
+  # collisions with the bucket the old account still owns.
+  bucketName: timebrew-web-prod-891772298575
+
 resources:
   Resources:
+    # =========================================================================
+    # Route53 hosted zone for timebrew.news (NS must be set at the registrar)
+    # =========================================================================
+    HostedZone:
+      Type: AWS::Route53::HostedZone
+      Properties:
+        Name: ${self:custom.domainName}
+
+    # =========================================================================
+    # ACM certificate (DNS-validated automatically against the hosted zone).
+    # NOTE: validation only completes once the registrar nameservers point at
+    # this hosted zone, so the stack waits here on first deploy.
+    # =========================================================================
+    Certificate:
+      Type: AWS::CertificateManager::Certificate
+      Properties:
+        DomainName: ${self:custom.domainName}
+        SubjectAlternativeNames:
+          - www.${self:custom.domainName}
+        ValidationMethod: DNS
+        DomainValidationOptions:
+          - DomainName: ${self:custom.domainName}
+            HostedZoneId: !Ref HostedZone
+          - DomainName: www.${self:custom.domainName}
+            HostedZoneId: !Ref HostedZone
+
     # S3 Bucket for hosting (private, accessed via CloudFront only)
     WebsiteBucket:
       Type: AWS::S3::Bucket
       Properties:
-        BucketName: timebrew-frontend-prod
+        BucketName: ${self:custom.bucketName}
         PublicAccessBlockConfiguration:
           BlockPublicAcls: true
           BlockPublicPolicy: true
@@ -50,9 +82,10 @@ resources:
           Enabled: true
           DefaultRootObject: index.html
           Aliases:
-            - timebrew.news
+            - ${self:custom.domainName}
+            - www.${self:custom.domainName}
           ViewerCertificate:
-            AcmCertificateArn: arn:aws:acm:us-east-1:526084139141:certificate/44fe89f1-2e02-430c-bd0e-aa6535273a1d
+            AcmCertificateArn: !Ref Certificate
             SslSupportMethod: sni-only
             MinimumProtocolVersion: TLSv1.2_2021
           CustomErrorResponses:
@@ -79,18 +112,32 @@ resources:
                 StringEquals:
                   "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
 
-    # Route53 Record
-    DNSRecord:
+    # Route53 alias records -> CloudFront
+    ApexDNSRecord:
       Type: AWS::Route53::RecordSet
       Properties:
-        HostedZoneId: Z07120566VA5JCWD7F3R
-        Name: timebrew.news
+        HostedZoneId: !Ref HostedZone
+        Name: ${self:custom.domainName}
+        Type: A
+        AliasTarget:
+          DNSName: !GetAtt CloudFrontDistribution.DomainName
+          HostedZoneId: Z2FDTNDATAQYW2
+
+    WwwDNSRecord:
+      Type: AWS::Route53::RecordSet
+      Properties:
+        HostedZoneId: !Ref HostedZone
+        Name: www.${self:custom.domainName}
         Type: A
         AliasTarget:
           DNSName: !GetAtt CloudFrontDistribution.DomainName
           HostedZoneId: Z2FDTNDATAQYW2
 
   Outputs:
+    HostedZoneNameServers:
+      Description: "Set these as the nameservers for timebrew.news at your registrar"
+      Value: !Join [", ", !GetAtt HostedZone.NameServers]
+
     WebsiteBucketName:
       Value: !Ref WebsiteBucket
       Description: "S3 Bucket for website hosting"
