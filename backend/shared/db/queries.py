@@ -228,13 +228,15 @@ def create_curator_log(run_id, user_id, raw_articles, topics_searched,
 
 def update_curator_log(run_id, raw_articles, curator_notes, runtime_ms):
     """Update a curator_log with parsed articles."""
+    articles = raw_articles or []
     table("curator_logs").update_item(
         Key={"run_id": run_id},
-        UpdateExpression="SET raw_articles = :a, curator_notes = :n, runtime_ms = :r",
+        UpdateExpression="SET raw_articles = :a, curator_notes = :n, runtime_ms = :r, article_count = :c",
         ExpressionAttributeValues={
-            ":a": json.dumps(raw_articles or []),
+            ":a": json.dumps(articles),
             ":n": curator_notes or "",
             ":r": int(runtime_ms or 0),
+            ":c": len(articles),
         },
     )
 
@@ -405,14 +407,26 @@ class OptimizedQueries:
         (run_id, editorial_content, email_sent, email_sent_time, created_at,
          total_count, editorial_id)
         """
-        # Fetch enough items to satisfy the requested offset window, then slice.
-        resp = table("editor_logs").query(
-            IndexName="userbrew-index",
-            KeyConditionExpression=Key("user_brew").eq(f"{user_id}#{brew_id}"),
-            ScanIndexForward=False,
-            Limit=offset + limit,
-        )
-        items = resp.get("Items", [])
+        # DynamoDB applies Limit before paging, so it can't give an accurate
+        # total or a correct deep-offset window in one call. Page through the
+        # full index for this user_brew (newest first), then slice. A user's
+        # briefing history is small; cap defensively to bound worst case.
+        MAX_BRIEFINGS = 1000
+        items = []
+        start_key = None
+        while len(items) < MAX_BRIEFINGS:
+            query_kwargs = dict(
+                IndexName="userbrew-index",
+                KeyConditionExpression=Key("user_brew").eq(f"{user_id}#{brew_id}"),
+                ScanIndexForward=False,
+            )
+            if start_key:
+                query_kwargs["ExclusiveStartKey"] = start_key
+            resp = table("editor_logs").query(**query_kwargs)
+            items.extend(resp.get("Items", []))
+            start_key = resp.get("LastEvaluatedKey")
+            if not start_key:
+                break
         total_count = len(items)
         window = items[offset:offset + limit]
         rows = []

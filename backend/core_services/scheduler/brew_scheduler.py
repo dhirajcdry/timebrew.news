@@ -13,17 +13,18 @@ from shared.db.queries import (
     create_run,
 )
 from shared.utils.dynamo import parse_dt
+from shared.utils.other_utils import normalize_delivery_time
 from core_services.scheduler.trigger_brew import build_run_snapshot, trigger_ai_pipeline
 
-DELIVERY_WINDOW_MINUTES = 30
+# Must equal the EventBridge schedule interval (rate(15 minutes)). A wider
+# window would let two consecutive scheduler runs both see the same brew as
+# "due" and fire it twice. The interval below is half-open: [now, now+15min).
+DELIVERY_WINDOW_MINUTES = 15
 
 
 def _parse_delivery_time(delivery_time):
-    """Parse a 'HH:MM:SS' delivery time into a time object (24:00:00 -> 00:00:00)."""
-    value = str(delivery_time)
-    if value.startswith("24"):
-        value = "00" + value[2:]
-    return datetime.strptime(value, "%H:%M:%S").time()
+    """Parse a delivery time ('HH:MM' or 'HH:MM:SS') into a time object."""
+    return datetime.strptime(normalize_delivery_time(delivery_time), "%H:%M:%S").time()
 
 
 def is_brew_due(brew, user, now_utc):
@@ -47,8 +48,8 @@ def is_brew_due(brew, user, now_utc):
 
     delivery_local = tz.localize(datetime.combine(now_local.date(), delivery_t))
 
-    # Within the next 30 minutes?
-    if not (now_local <= delivery_local <= now_local + timedelta(minutes=DELIVERY_WINDOW_MINUTES)):
+    # Due within this scheduler tick's half-open window [now, now + interval)?
+    if not (now_local <= delivery_local < now_local + timedelta(minutes=DELIVERY_WINDOW_MINUTES)):
         return False, None
 
     # Already delivered today (in the user's local date)?
@@ -71,7 +72,7 @@ def is_brew_due(brew, user, now_utc):
 def lambda_handler(event, context):
     """
     Brew Scheduler Lambda Function
-    Runs every 15 minutes to check for brews due in the next 30 minutes.
+    Runs every 15 minutes to check for brews due in the next 15 minutes.
     Timezone-aware filtering is done in Python over the active-brews index.
     """
     start_time = datetime.now(timezone.utc)

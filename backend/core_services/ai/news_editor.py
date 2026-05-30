@@ -216,7 +216,7 @@ BEGIN JSON:"""
                 ],
                 model=model,
                 temperature=0.7,
-                max_tokens=3000,
+                max_tokens=4500,
             )
             ai_response = ai_response_data["content"]
             api_duration = (datetime.now(timezone.utc) - api_start_time).total_seconds() * 1000

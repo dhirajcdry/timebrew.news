@@ -153,6 +153,7 @@ def lambda_handler(event, context):
         # Build AI prompt using the exact tested template
         prompt = f"""# MISSION (MUST)
 Return **3–8** distinct news stories for "{brew_name}" briefing that focuses on these topics- {brew_focus_topics_str}.
+For broad or active topics there is almost always enough qualifying news — returning an empty "articles" array should be rare and is only allowed under the SLOW-DAY RULE below. Default to delivering articles.
 
 # CONTEXT
 - Reader: {user_name}
@@ -175,9 +176,10 @@ Return **3–8** distinct news stories for "{brew_name}" briefing that focuses o
 - Well-known, reputable source.
 - Never news aggregators or news summarizers, NEVER.
 
-# SLOW-DAY RULE (MUST)
-If you cannot find even **3** qualified stories:
-- Use `"curator_notes"` to provide details on whats trending trending reference to past articles, landscape, what is going on, why potentially lead to no or less news! The more details you provide, the better the editor can write, and articulate.
+# SLOW-DAY RULE (MUST — GENUINE LAST RESORT)
+This applies ONLY when, after relaxing the DIVERSITY RULES (e.g. allowing two stories from the same company or fewer publishers), you still genuinely cannot find **3** qualified stories in the window. Prefer returning articles — even slightly less diverse ones — over an empty list.
+If and only if that genuine case holds:
+- Return an empty `"articles"` array AND use `"curator_notes"` to explain the landscape: what's trending, why news is thin, references to the recent past. The more detail, the better the editor can write.
 
 # OUTPUT FORMAT (MUST)
 {{
@@ -195,7 +197,7 @@ If you cannot find even **3** qualified stories:
 }}
 
 # SELF-CHECK BEFORE RESPONDING
-✓ 3–8 articles, **or** or detailed curator_notes for SLOW-DAY RULE
+✓ 3–8 articles whenever they exist (the normal case); empty articles + detailed curator_notes ONLY for a genuine SLOW-DAY after relaxing diversity
 ✓ Look into a wide variety of news articles and pick only ones worth noting based on {user_name}'s interests
 ✓ No duplicate companies / events
 ✓ JSON parses without error
@@ -222,6 +224,12 @@ BEGIN JSON:"""
             ai_response_data = ai_service.call(
                 provider,
                 prompt=prompt,
+                system=(
+                    "You are a precise JSON API. Respond with ONLY a single valid "
+                    "JSON object matching the requested schema — no prose, no "
+                    "markdown fences, no citations or source lists outside the JSON. "
+                    "Start your response with { and end with }."
+                ),
                 model=model,
                 temperature=0.2,
                 max_tokens=4000,
@@ -272,13 +280,27 @@ BEGIN JSON:"""
             print(f"[NEWS_CURATOR] ERROR: Failed to parse JSON from AI response: {str(e)}")
             raise Exception(str(e))
 
-        # Extract articles and curator notes
-        articles = response_data.get("articles", [])
-        curator_notes = response_data.get("curator_notes", "")
+        # Extract articles and curator notes. The model may return either an
+        # {"articles": [...]} object or a bare [...] array; accept both.
+        if isinstance(response_data, list):
+            articles = response_data
+            curator_notes = ""
+        else:
+            articles = response_data.get("articles", [])
+            curator_notes = response_data.get("curator_notes", "") or ""
 
         print(
-            f"[NEWS_CURATOR] Article curation completed: total_articles={len(articles)}, curator_notes_provided={bool(curator_notes.strip())}"
+            f"[NEWS_CURATOR] Article curation completed: total_articles={len(articles)}, response_keys={list(response_data.keys()) if isinstance(response_data, dict) else 'list'}, curator_notes_provided={bool(curator_notes.strip())}"
         )
+
+        # A genuine slow news day produces curator_notes explaining why; getting
+        # neither articles nor notes means the response shape was wrong and we
+        # silently lost the content. Fail loudly so it surfaces in the run.
+        if not articles and not curator_notes.strip():
+            raise Exception(
+                "Curator returned no articles and no curator_notes — likely an "
+                "unparseable or unexpected response shape (see raw_llm_response in curator log)"
+            )
 
         # Update curator log with final parsed articles
         print(f"[NEWS_CURATOR] Updating curator log with parsed articles")

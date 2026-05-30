@@ -1,5 +1,6 @@
 from shared.base import BaseHandler
 from shared.db.queries import OptimizedQueries
+from shared.utils.other_utils import normalize_delivery_time
 
 
 class BrewsCreateHandler(BaseHandler):
@@ -18,6 +19,12 @@ class BrewsCreateHandler(BaseHandler):
             return self.error_response(400, "Brew name is required")
         if not delivery_time:
             return self.error_response(400, "Delivery time is required")
+        # Store a canonical HH:MM:SS (the client sends HH:MM); the curator and
+        # scheduler both parse this strictly.
+        try:
+            delivery_time = normalize_delivery_time(delivery_time)
+        except ValueError:
+            return self.error_response(400, "Delivery time must be in HH:MM or HH:MM:SS format")
         if not topics or not isinstance(topics, list):
             return self.error_response(400, "Topics must be a non-empty array")
         

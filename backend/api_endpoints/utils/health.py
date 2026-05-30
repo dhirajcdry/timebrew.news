@@ -33,7 +33,7 @@ def handler(event, context):
         else:
             print(f"[HEALTH] ERROR: Database connection test failed, connection_time_ms={round(db_duration, 2)}")
 
-        current_timestamp = datetime.now(timezone.utc).isoformat() + "Z"
+        current_timestamp = datetime.now(timezone.utc).isoformat()
 
         response = create_response(
             200,
@@ -58,7 +58,7 @@ def handler(event, context):
             500,
             {
                 "message": "Health check failed",
-                "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "service": "timebrew-backend",
                 "error": "Internal server error",
             },

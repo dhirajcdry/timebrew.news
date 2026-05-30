@@ -62,20 +62,20 @@ provider:
   iam:
     role:
       statements:
+        # Only the actions register.py / auth middleware actually call,
+        # scoped to this pool.
         - Effect: Allow
           Action:
-            - cognito-idp:*
-          Resource: "*"
+            - cognito-idp:SignUp
+            - cognito-idp:GetUser
+            - cognito-idp:AdminDeleteUser
+          Resource: !GetAtt CognitoUserPool.Arn
+        # Only StartExecution, scoped to our state machine. Use the constructed
+        # ARN (not !Ref) to avoid a role -> state machine -> lambda -> role cycle.
         - Effect: Allow
           Action:
             - states:StartExecution
-            - states:DescribeExecution
-            - states:StopExecution
-          Resource: "*"
-        - Effect: Allow
-          Action:
-            - lambda:InvokeFunction
-          Resource: "*"
+          Resource: arn:aws:states:${aws:region}:${aws:accountId}:stateMachine:${self:service}-ai-pipeline-${self:provider.stage}
         - Effect: Allow
           Action:
             - ses:SendEmail
@@ -484,10 +484,19 @@ resources:
       Type: AWS::Cognito::UserPool
       Properties:
         UserPoolName: ${self:service}-users-${self:provider.stage}
+        # Choice-based / passwordless EMAIL_OTP sign-in requires the
+        # ESSENTIALS feature tier.
+        UserPoolTier: ESSENTIALS
         UsernameAttributes:
           - email
         AutoVerifiedAttributes:
           - email
+        # Send all pool emails (OTP codes, verification) through our verified
+        # SES identity instead of the rate-limited Cognito default sender.
+        EmailConfiguration:
+          EmailSendingAccount: DEVELOPER
+          SourceArn: arn:aws:ses:${self:provider.region}:${aws:accountId}:identity/timebrew.news
+          From: ${env:SES_FROM_EMAIL, 'no-reply@timebrew.news'}
         Schema:
           - Name: email
             AttributeDataType: String
@@ -508,6 +517,12 @@ resources:
             RequireLowercase: true
             RequireNumbers: true
             RequireSymbols: true
+          # Allow either a password or an emailed one-time code as the first
+          # auth factor. The web client uses EMAIL_OTP (passwordless).
+          SignInPolicy:
+            AllowedFirstAuthFactors:
+              - PASSWORD
+              - EMAIL_OTP
         AccountRecoverySetting:
           RecoveryMechanisms:
             - Name: verified_email
@@ -520,6 +535,9 @@ resources:
         UserPoolId: !Ref CognitoUserPool
         GenerateSecret: false
         ExplicitAuthFlows:
+          # ALLOW_USER_AUTH enables the choice-based USER_AUTH flow the web
+          # client uses for passwordless EMAIL_OTP sign-in.
+          - ALLOW_USER_AUTH
           - ALLOW_USER_SRP_AUTH
           - ALLOW_USER_PASSWORD_AUTH
           - ALLOW_REFRESH_TOKEN_AUTH

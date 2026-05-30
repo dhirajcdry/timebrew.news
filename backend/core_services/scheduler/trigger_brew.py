@@ -10,6 +10,7 @@ from shared.db.queries import (
     create_run,
 )
 from shared.utils.dynamo import parse_dt
+from shared.middleware.auth import authenticate_user, validate_ownership
 # from shared.utils.logger import Logger
 
 
@@ -49,6 +50,15 @@ def lambda_handler(event, context):
         if not brew_id:
             print("[TRIGGER_BREW] WARNING: Manual trigger attempt without brew_id")
             return create_response(400, {"error": "brew_id is required"})
+
+        # This endpoint starts a paid pipeline (OpenRouter + an email send), so
+        # require an authenticated caller who owns the brew.
+        auth_user, auth_error = authenticate_user(event)
+        if auth_error:
+            return auth_error
+        owns_brew, ownership_error = validate_ownership(auth_user["id"], "brew", brew_id)
+        if ownership_error:
+            return ownership_error
 
         print(f"[TRIGGER_BREW] Processing manual trigger request - brew_id: {brew_id}")
 

@@ -53,6 +53,7 @@ class AIService:
     def _call_openrouter(self,
                         prompt: str = None,
                         messages: List[Dict[str, str]] = None,
+                        system: str = None,
                         model: str = "openai/gpt-4",
                         temperature: float = 0.7,
                         max_tokens: int = 3000,
@@ -61,7 +62,8 @@ class AIService:
         """Call OpenRouter's OpenAI-compatible Chat Completions API with retries.
 
         Accepts either a single `prompt` string (wrapped into a user message) or
-        a pre-built `messages` list.
+        a pre-built `messages` list. An optional `system` message is prepended
+        when using `prompt`.
         """
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
@@ -70,7 +72,10 @@ class AIService:
         if messages is None:
             if prompt is None:
                 raise AIServiceError("Either 'prompt' or 'messages' must be provided")
-            messages = [{"role": "user", "content": prompt}]
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
 
         client = openai.OpenAI(
             api_key=api_key,
@@ -96,17 +101,27 @@ class AIService:
                 )
 
                 content = response.choices[0].message.content
-                print(f"[AI_SERVICE] OpenRouter response received - response_length: {len(content)}, model: {model}, attempt: {attempt + 1}")
+                finish_reason = response.choices[0].finish_reason
+                print(f"[AI_SERVICE] OpenRouter response received - response_length: {len(content)}, model: {model}, attempt: {attempt + 1}, finish_reason: {finish_reason}")
+
+                # A "length" finish means max_tokens cut the response off mid-way,
+                # which usually yields truncated/invalid JSON. Surface it loudly
+                # instead of letting the downstream JSON parse fail cryptically.
+                if finish_reason == "length":
+                    print(f"[AI_SERVICE] WARNING: Response truncated by max_tokens={max_tokens} (finish_reason=length) — output is likely incomplete JSON")
 
                 return {
                     "content": content,
                     "model": model,
                     "provider": "openrouter",
                     "usage": response.usage.model_dump() if response.usage else {},
+                    "finish_reason": finish_reason,
                     "raw_response": None,
                 }
 
-            except (openai.APITimeoutError, openai.APIConnectionError, openai.RateLimitError) as e:
+            # OpenRouter routinely returns transient 5xx (InternalServerError)
+            # during model cold-routing — retry those alongside timeouts/rate limits.
+            except (openai.APITimeoutError, openai.APIConnectionError, openai.RateLimitError, openai.InternalServerError) as e:
                 last_exception = e
                 print(f"[AI_SERVICE] WARNING: OpenRouter retryable error on attempt {attempt + 1}/{max_retries + 1} - error: {str(e)}")
                 if attempt == max_retries:
@@ -126,45 +141,77 @@ class AIService:
     def get_available_providers(self) -> List[str]:
         return list(self.providers.keys())
 
+    @staticmethod
+    def _extract_balanced(text: str, open_ch: str, close_ch: str):
+        """Return the first balanced open_ch..close_ch span, respecting strings.
+
+        Unlike find/rfind this won't be fooled by stray braces in trailing prose
+        (e.g. "... {smile}") because it tracks nesting depth and skips quoted
+        content and escapes.
+        """
+        start = text.find(open_ch)
+        if start == -1:
+            return None
+        depth = 0
+        in_str = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == open_ch:
+                    depth += 1
+                elif ch == close_ch:
+                    depth -= 1
+                    if depth == 0:
+                        return text[start:i + 1]
+        return None
+
     def parse_json_from_response(self, content: str) -> Dict[str, Any]:
         """Parse a JSON object from an LLM response, handling common quirks."""
         print("[AI_SERVICE] Attempting to parse JSON from AI response")
-        try:
-            # Remove <think> blocks
-            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+        # Strip reasoning blocks some models emit.
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+        content_clean = content.strip()
 
-            content_clean = content.strip()
+        # Models like perplexity/sonar-pro wrap JSON in prose + citations and
+        # often fence it. Try strategies from most to least reliable.
+        candidates = []
 
-            # Remove any potential markdown code blocks
-            if content_clean.startswith("```json"):
-                content_clean = content_clean[7:]
-            if content_clean.startswith("```"):
-                content_clean = content_clean[3:]
-            if content_clean.endswith("```"):
-                content_clean = content_clean[:-3]
+        # 1. Content inside a ```json ... ``` (or bare ```) fenced block.
+        fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", content_clean, re.DOTALL)
+        if fenced:
+            candidates.append(fenced.group(1).strip())
 
-            content_clean = content_clean.strip()
+        # 2. The whole thing, in case it's already clean JSON.
+        candidates.append(content_clean)
 
-            # Fallback to extracting the first and last curly brace
-            start_idx = content_clean.find("{")
-            end_idx = content_clean.rfind("}") + 1
+        # 3. The first *balanced* object, then array — prose with stray braces
+        #    can't corrupt these (object preferred so we keep the full shape).
+        candidates.append(self._extract_balanced(content_clean, "{", "}"))
+        candidates.append(self._extract_balanced(content_clean, "[", "]"))
 
-            if start_idx != -1 and end_idx != 0:
-                json_str = content_clean[start_idx:end_idx]
-                response_data = json.loads(json_str)
-                print("[AI_SERVICE] Successfully extracted and parsed JSON from AI response")
+        last_error = None
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                response_data = json.loads(candidate)
+                print("[AI_SERVICE] Successfully parsed JSON from AI response")
                 return response_data
-            else:
-                response_data = json.loads(content_clean)
-                print("[AI_SERVICE] Successfully parsed entire content as JSON")
-                return response_data
+            except json.JSONDecodeError as e:
+                last_error = e
 
-        except json.JSONDecodeError as e:
-            print(f"[AI_SERVICE] ERROR: Failed to parse JSON from AI response - error: {str(e)}, content_preview: {content[:500]}")
-            raise ValueError(f"Failed to parse JSON from AI response: {str(e)}")
-        except Exception as e:
-            print(f"[AI_SERVICE] ERROR: An unexpected error occurred during JSON parsing - error: {str(e)}")
-            raise
+        print(f"[AI_SERVICE] ERROR: Failed to parse JSON from AI response - error: {str(last_error)}, content_preview: {content[:500]}")
+        raise ValueError(f"Failed to parse JSON from AI response: {str(last_error)}")
 
 
 # Global instance for easy importing
