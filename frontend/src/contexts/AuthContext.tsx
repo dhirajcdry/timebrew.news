@@ -245,10 +245,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 		otp: string
 	): Promise<{ success: boolean; error?: string }> => {
 		try {
+			// Confirm the account with the emailed verification code. We do NOT
+			// auto-initiate sign-in here — the user is routed to the sign-in page
+			// and signs in with a single EMAIL_OTP, avoiding a confusing
+			// two-code first-time experience.
 			await confirmSignUp({ username: email, confirmationCode: otp });
-			// After successful registration, initiate login
-			const loginResult = await initiateLogin(email);
-			return loginResult;
+			return { success: true };
 		} catch (error: any) {
 			console.error("Registration verification failed:", error);
 			return {

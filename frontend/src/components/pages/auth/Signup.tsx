@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
 	Coffee,
@@ -38,7 +38,8 @@ interface ApiResponse {
 }
 
 const Signup: React.FC = () => {
-	const { register } = useAuth();
+	const { register, verifyRegistration } = useAuth();
+	const navigate = useNavigate();
 	const [formData, setFormData] = useState<SignupFormData>({
 		email: "",
 		firstName: "",
@@ -53,6 +54,58 @@ const Signup: React.FC = () => {
 	const [error, setError] = useState<React.ReactNode>("");
 	const [currentStep, setCurrentStep] = useState(1);
 	const [showEmailError, setShowEmailError] = useState(false);
+
+	// Email-verification (post-registration) state
+	const [verificationCode, setVerificationCode] = useState("");
+	const [verifying, setVerifying] = useState(false);
+	const [verifyError, setVerifyError] = useState("");
+	const [resendMsg, setResendMsg] = useState("");
+
+	const handleVerify = async (e: React.FormEvent) => {
+		e.preventDefault();
+		setVerifyError("");
+		const code = verificationCode.trim();
+		if (!code) {
+			setVerifyError("Please enter the verification code from your email");
+			return;
+		}
+		setVerifying(true);
+		try {
+			const result = await verifyRegistration(formData.email, code);
+			if (result.success) {
+				// Account confirmed — send them to sign in (single email OTP).
+				navigate("/signin", {
+					state: {
+						email: formData.email,
+						verified: true,
+					},
+				});
+			} else {
+				setVerifyError(
+					result.error?.includes("CodeMismatch") ||
+						result.error?.includes("Invalid")
+						? "That code doesn't match. Please check and try again."
+						: result.error || "Verification failed. Please try again."
+				);
+			}
+		} catch {
+			setVerifyError("Network error. Please try again.");
+		} finally {
+			setVerifying(false);
+		}
+	};
+
+	const handleResendCode = async () => {
+		setResendMsg("");
+		setVerifyError("");
+		try {
+			const { resendSignUpCode } = await import("aws-amplify/auth");
+			await resendSignUpCode({ username: formData.email });
+			setResendMsg("A new code is on its way to your inbox.");
+		} catch (err: any) {
+			setVerifyError(err?.message || "Couldn't resend the code. Please try again.");
+		}
+	};
 	
 	// Track which fields have been touched/interacted with
 	const [touchedFields, setTouchedFields] = useState<Record<string, boolean>>({
@@ -267,34 +320,77 @@ const Signup: React.FC = () => {
 
 								<div className="space-y-2">
 									<p className="text-muted-foreground">
-										We've sent a verification link to{" "}
+										We've sent a verification code to{" "}
 										<strong>{formData.email}</strong>
 									</p>
 									<p className="text-sm text-muted-foreground">
-										Click the link to verify your account, then you can sign in
-										using just your email!
+										Enter the code below to verify your account.
 									</p>
 								</div>
 
-								<div className="bg-primary/10 border border-primary/20 rounded-xl p-4">
-									<div className="flex items-start space-x-3">
-										<Shield className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
-										<div className="text-sm">
-											<div className="font-medium text-primary mb-1">
-												Passwordless Authentication
-											</div>
-											<div className="text-muted-foreground">
-												No passwords to remember - just secure email codes!
-											</div>
+								<form onSubmit={handleVerify} className="space-y-4">
+									<input
+										type="text"
+										inputMode="numeric"
+										autoComplete="one-time-code"
+										value={verificationCode}
+										onChange={(e) => {
+											setVerificationCode(
+												e.target.value.replace(/\D/g, "")
+											);
+											if (verifyError) setVerifyError("");
+											if (resendMsg) setResendMsg("");
+										}}
+										placeholder="Enter verification code"
+										className="w-full px-4 py-3 text-center tracking-[0.4em] text-lg bg-background/50 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
+										autoFocus
+									/>
+
+									{verifyError && (
+										<div className="flex items-center justify-center space-x-2 text-red-500 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+											<AlertCircle className="w-4 h-4 flex-shrink-0" />
+											<span className="text-sm">{verifyError}</span>
 										</div>
-									</div>
+									)}
+									{resendMsg && (
+										<div className="text-sm text-primary">{resendMsg}</div>
+									)}
+
+									<ShinyButton
+										disabled={verifying || !verificationCode}
+										className="w-full flex items-center justify-center gap-2 [&>span]:!flex [&>span]:!items-center [&>span]:!justify-center [&>span]:!gap-2"
+									>
+										{verifying ? (
+											<>
+												<Loader2 className="w-4 h-4 animate-spin" />
+												<span>Verifying...</span>
+											</>
+										) : (
+											<>
+												<Shield className="w-4 h-4" />
+												<span>Verify & Continue</span>
+											</>
+										)}
+									</ShinyButton>
+								</form>
+
+								<div className="text-sm text-muted-foreground">
+									Didn't get it? Check spam, or{" "}
+									<button
+										type="button"
+										onClick={handleResendCode}
+										className="text-primary hover:underline font-medium"
+									>
+										resend the code
+									</button>
+									.
 								</div>
 
-								<Link to="/signin">
-									<ShinyButton className="w-full flex items-center justify-center gap-2 [&>span]:!flex [&>span]:!items-center [&>span]:!justify-center [&>span]:!gap-2">
-										<Coffee className="w-4 h-4" />
-										<span>Go to Sign In</span>
-									</ShinyButton>
+								<Link
+									to="/signin"
+									className="block text-sm text-muted-foreground hover:text-foreground transition-colors"
+								>
+									Already verified? Sign in
 								</Link>
 							</div>
 						</div>

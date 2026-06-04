@@ -133,6 +133,31 @@ resources:
           DNSName: !GetAtt CloudFrontDistribution.DomainName
           HostedZoneId: Z2FDTNDATAQYW2
 
+    # =========================================================================
+    # Email authentication for SES-sent mail (Cognito OTP / verification, daily
+    # briefings). DKIM CNAMEs are managed out-of-band by SES. These add SPF and
+    # DMARC so mail from no-reply@timebrew.news lands in the inbox, not spam.
+    # =========================================================================
+    SpfRecord:
+      Type: AWS::Route53::RecordSet
+      Properties:
+        HostedZoneId: !Ref HostedZone
+        Name: ${self:custom.domainName}
+        Type: TXT
+        TTL: "300"
+        ResourceRecords:
+          - '"v=spf1 include:amazonses.com ~all"'
+
+    DmarcRecord:
+      Type: AWS::Route53::RecordSet
+      Properties:
+        HostedZoneId: !Ref HostedZone
+        Name: _dmarc.${self:custom.domainName}
+        Type: TXT
+        TTL: "300"
+        ResourceRecords:
+          - '"v=DMARC1; p=none;"'
+
   Outputs:
     HostedZoneNameServers:
       Description: "Set these as the nameservers for timebrew.news at your registrar"
