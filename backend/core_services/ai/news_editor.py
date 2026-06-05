@@ -25,7 +25,7 @@ def lambda_handler(event, context):
     Reads from / writes to DynamoDB (run_tracker, curator_logs, editor_logs).
     """
     start_time = time.time()  # Use time.time() for precise millisecond calculation
-    print(f"[NEWS_EDITOR] Request started - event: {event}, endpoint: ai/news_editor")
+    print(f"[NEWS_EDITOR] Request started - run_id: {event.get('run_id')}, endpoint: ai/news_editor")
 
     run_id = None
 
@@ -58,7 +58,7 @@ def lambda_handler(event, context):
         first_name = run.get("first_name") or ""
         last_name = run.get("last_name") or ""
 
-        print(f"[NEWS_EDITOR] Setting context - user_id: {user_id}, user_email: {email}, run_id: {run_id}, brew_id: {brew_id}")
+        print(f"[NEWS_EDITOR] Setting context - user_id: {user_id}, run_id: {run_id}, brew_id: {brew_id}")
 
         user_name = f"{first_name} {last_name}".strip()
         delivery_time = format_time_ampm(str(delivery_time_raw))

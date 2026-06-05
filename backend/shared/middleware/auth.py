@@ -39,7 +39,7 @@ def authenticate_user(event):
             print(f"[AUTH] ERROR: User not found in database for cognito_id: {cognito_id}")
             return None, create_response(404, {"error": "User not found"})
 
-        print(f"[AUTH] User authentication successful: user_id={user['id']}, email={user['email']}")
+        print(f"[AUTH] User authentication successful: user_id={user['id']}")
         return {"id": str(user["id"]), "email": user["email"], "cognito_id": user["cognito_id"]}, None
 
     except Exception as e:

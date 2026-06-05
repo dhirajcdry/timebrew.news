@@ -61,7 +61,7 @@ def handler(event, context):
 
         except Exception as e:
             print(f"Database error: {e}")
-            return create_response(500, {"error": f"Database error: {str(e)}"})
+            return create_response(500, {"error": "Failed to retrieve brew"})
 
     except Exception as e:
         print(f"Unexpected error: {e}")

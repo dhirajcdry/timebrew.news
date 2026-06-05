@@ -76,7 +76,7 @@ def lambda_handler(event, context):
         last_name = run.get("last_name") or ""
         last_sent_date = parse_dt(brew.get("last_sent_date"))
 
-        print(f"[NEWS_CURATOR] Context updated: user_id={user_id}, email={email}, run_id={run_id}")
+        print(f"[NEWS_CURATOR] Context updated: user_id={user_id}, run_id={run_id}")
 
         delivery_time = format_time_ampm(str(delivery_time_raw))
         user_name = f"{first_name} {last_name}".strip()

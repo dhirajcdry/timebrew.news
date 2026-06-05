@@ -114,13 +114,13 @@ def lambda_handler(event, context):
                 else first_name or "User"
             )
 
-            print(f"[BREW_SCHEDULER] Brew due - brew_id: {brew_id}, user_id: {user_id}, user_email: {email}")
+            print(f"[BREW_SCHEDULER] Brew due - brew_id: {brew_id}, user_id: {user_id}")
 
             try:
                 run_id = create_run(brew_id, user_id, snapshot=build_run_snapshot(brew, user))
                 print(f"[BREW_SCHEDULER] Run tracker entry created - run_id: {run_id}, brew_id: {brew_id}")
 
-                print(f"[BREW_SCHEDULER] Triggering AI pipeline - brew_name: {brew.get('name')}, user_timezone: {user.get('timezone')}, delivery_time: {brew.get('delivery_time')}, run_id: {run_id}")
+                print(f"[BREW_SCHEDULER] Triggering AI pipeline - brew_id: {brew_id}, user_timezone: {user.get('timezone')}, delivery_time: {brew.get('delivery_time')}, run_id: {run_id}")
                 success, execution_arn = trigger_ai_pipeline(brew_id, run_id, "scheduler")
 
                 if success:

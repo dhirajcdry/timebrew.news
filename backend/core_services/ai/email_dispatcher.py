@@ -16,6 +16,7 @@ from shared.db.queries import (
     mark_editor_email_sent,
 )
 from shared.utils.dynamo import to_iso
+from shared.utils.html_email import esc, safe_href
 
 
 def format_email_html(editor_draft, brew_name, current_time):
@@ -34,12 +35,12 @@ def format_email_html(editor_draft, brew_name, current_time):
     <div style="margin: 0 auto; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; padding: 20px; background: transparent;">
         <!-- Header -->
         <div style="text-align: center; padding: 20px 0; border-bottom: 1px solid #e9ecef; margin-bottom: 24px; background: transparent;">
-            <h1 style="font-size: 20px; font-weight: 600; color: #1a252f; margin: 0;">Your {brew_name} • {date_str}</h1>
+            <h1 style="font-size: 20px; font-weight: 600; color: #1a252f; margin: 0;">Your {esc(brew_name)} • {esc(date_str)}</h1>
         </div>
         
         <!-- Personal Greeting -->
         <div style="margin-bottom: 24px; background: transparent;">
-            <p style="font-size: 16px; line-height: 1.6; color: #2c3e50; margin: 0;">{intro}</p>
+            <p style="font-size: 16px; line-height: 1.6; color: #2c3e50; margin: 0;">{esc(intro)}</p>
         </div>
     """
 
@@ -59,11 +60,12 @@ def format_email_html(editor_draft, brew_name, current_time):
         if time_ago:
             source_time += f" • {time_ago}"
 
-        # Read more link - only if we have a URL
+        # Read more link - only if we have a safe http/https URL
         read_more_link = ""
-        if original_url and original_url != "null" and original_url.strip():
+        safe_url = safe_href(original_url)
+        if safe_url:
             read_more_link = f"""
-            <a href="{original_url}" style="color: #3498db; text-decoration: none; font-weight: 500; font-size: 15px;">
+            <a href="{safe_url}" style="color: #3498db; text-decoration: none; font-weight: 500; font-size: 15px;">
                 Read the full story →
             </a>
             """
@@ -74,15 +76,15 @@ def format_email_html(editor_draft, brew_name, current_time):
         <div style="padding: 20px; margin: 16px 0; border: 1px solid #e9ecef; border-radius: 8px; background: transparent;">
             <!-- SOURCE and TIME AGO -->
             <div style="font-size: 14px; color: #6c757d; margin-bottom: 8px; font-weight: 500;">
-                {source_time}
+                {esc(source_time)}
             </div>
             <!-- HEADLINE -->
             <h3 style="font-size: 18px; font-weight: 600; margin: 0 0 12px 0; color: #1a252f; line-height: 1.4;">
-                {headline}
+                {esc(headline)}
             </h3>
             <!-- STORY CONTENT -->
             <p style="margin: 0 0 16px 0; line-height: 1.6; color: #2c3e50; font-size: 16px;">
-                {story_content}
+                {esc(story_content)}
             </p>
             {read_more_link}
         </div>
@@ -92,7 +94,7 @@ def format_email_html(editor_draft, brew_name, current_time):
     html += f"""
         <!-- Sign-off -->
         <div style="margin-top: 32px; padding-top: 20px; border-top: 1px solid #e9ecef; background: transparent;">
-            <p style="font-size: 16px; line-height: 1.6; color: #2c3e50; margin: 0;">{outro}</p>
+            <p style="font-size: 16px; line-height: 1.6; color: #2c3e50; margin: 0;">{esc(outro)}</p>
             <p style="font-size: 14px; color: #6c757d; margin: 8px 0 0 0;">Your TimeBrew Team</p>
         </div>
     </div>
@@ -201,7 +203,7 @@ def lambda_handler(event, context):
         user_tz = pytz.timezone(brew_timezone)
         current_time = datetime.now(user_tz)
 
-        print(f"[EMAIL_DISPATCHER] Context updated: user_email={email}, user_name={user_name}")
+        print(f"[EMAIL_DISPATCHER] Context updated: run_id={run_id}, user_id={user_id}")
         print(f"[EMAIL_DISPATCHER] Retrieved briefing data successfully: brew_name={brew_name}, articles_count={len(editor_draft.get('articles', []))}")
 
         # Generate HTML content and extract subject from JSON
@@ -220,7 +222,7 @@ def lambda_handler(event, context):
         source = formataddr((from_name, from_email))
 
         # Send email via SES
-        print(f"[EMAIL_DISPATCHER] Attempting to send email via SES: from={from_email}, recipient={email}, subject_line={subject_line[:50] if subject_line else ''}")
+        print(f"[EMAIL_DISPATCHER] Attempting to send email via SES: from={from_email}, run_id={run_id}, subject_line={subject_line[:50] if subject_line else ''}")
 
         try:
             ses = boto3.client("ses", region_name=ses_region)

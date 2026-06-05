@@ -87,7 +87,7 @@ def lambda_handler(event, context):
             else first_name or "User"
         )
 
-        print(f"[TRIGGER_BREW] Brew found - brew_id: {brew_id}, user_id: {user_id}, user_email: {email}, user_name: {user_name}, user_timezone: {user_timezone}, is_active: {is_active}")
+        print(f"[TRIGGER_BREW] Brew found - brew_id: {brew_id}, user_id: {user_id}, user_timezone: {user_timezone}, is_active: {is_active}")
 
         if not is_active:
             print("[TRIGGER_BREW] WARNING: Attempted to trigger inactive brew")

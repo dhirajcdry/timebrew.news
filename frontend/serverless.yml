@@ -156,7 +156,7 @@ resources:
         Type: TXT
         TTL: "300"
         ResourceRecords:
-          - '"v=DMARC1; p=none;"'
+          - '"v=DMARC1; p=none; rua=mailto:dhirajc963@gmail.com;"'
 
   Outputs:
     HostedZoneNameServers:

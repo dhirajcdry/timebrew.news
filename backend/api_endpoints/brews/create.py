@@ -35,7 +35,18 @@ class BrewsCreateHandler(BaseHandler):
         # Validate topics
         if len(topics) > 10:
             return self.error_response(400, "Maximum 10 topics allowed")
-        
+
+        # Validate each topic is a non-empty string <= 100 chars (and strip it)
+        cleaned_topics = []
+        for topic in topics:
+            if not isinstance(topic, str) or not topic.strip():
+                return self.error_response(400, "Each topic must be a non-empty string")
+            stripped = topic.strip()
+            if len(stripped) > 100:
+                return self.error_response(400, "Each topic must be at most 100 characters")
+            cleaned_topics.append(stripped)
+        topics = cleaned_topics
+
         try:
             # Create brew using optimized query
             brew_id = OptimizedQueries.create_brew(

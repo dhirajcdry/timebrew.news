@@ -11,6 +11,8 @@ unchanged so Cognito uses its default (avoids breaking e.g. AdminCreateUser,
 which needs a {username} placeholder we don't supply).
 """
 
+from shared.utils.html_email import esc
+
 # App theme (converted from the site's OKLCH green palette to email-safe hex).
 PRIMARY = "#6DAE00"
 ACCENT = "#8AC500"
@@ -33,7 +35,10 @@ STYLED_SOURCES = {
 
 
 def _copy(kind, name):
-    hi = f"Hi {name}," if name else "Hi there,"
+    # `name` is user-controlled (Cognito given_name) and ends up in the HTML
+    # intro, so escape it to prevent HTML/link injection.
+    safe_name = esc(name)
+    hi = f"Hi {safe_name}," if safe_name else "Hi there,"
     if kind == "verify":
         return (
             "Verify your email",

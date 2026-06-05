@@ -1,11 +1,17 @@
 import json
 import boto3
 import os
+import re
 import uuid
 import json
+import pytz
+from datetime import datetime, timezone as timezone_module
 from shared.db.queries import create_user
 from shared.utils.response import create_response
 # from shared.utils.logger import logger  # Replaced with print statements
+
+# Basic email format sanity check (not a full RFC validator)
+EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 cognito = boto3.client("cognito-idp")
 
@@ -56,10 +62,37 @@ def handler(event, context):
         interests = body["interests"]  # Should be an array
         timezone = body.get("timezone", "UTC")
 
+        # Basic email format sanity check before calling Cognito
+        if not EMAIL_REGEX.match(email):
+            print(f"[REGISTER] WARNING: Registration attempt with invalid email format")
+            return create_response(400, {"error": "Invalid email format"})
+
+        # Validate field lengths
+        if len(first_name) > 100:
+            return create_response(400, {"error": "firstName must be at most 100 characters"})
+        if len(last_name) > 100:
+            return create_response(400, {"error": "lastName must be at most 100 characters"})
+        if len(country) > 100:
+            return create_response(400, {"error": "country must be at most 100 characters"})
+
         # Validate interests is an array
         if not isinstance(interests, list) or len(interests) == 0:
             print(f"[REGISTER] WARNING: Registration attempt with invalid interests for {email}")
             return create_response(400, {"error": "At least one interest is required"})
+
+        # Validate each interest is a non-empty string <= 100 chars
+        for interest in interests:
+            if not isinstance(interest, str) or not interest.strip():
+                return create_response(400, {"error": "Each interest must be a non-empty string"})
+            if len(interest.strip()) > 100:
+                return create_response(400, {"error": "Each interest must be at most 100 characters"})
+
+        # Validate timezone is a real zone; default to UTC rather than break signup
+        try:
+            pytz.timezone(timezone)
+        except Exception:
+            print(f"[REGISTER] WARNING: Invalid timezone provided, defaulting to UTC")
+            timezone = "UTC"
 
         # Create user in Cognito using sign_up (this sends verification email automatically)
         try:
@@ -86,9 +119,27 @@ def handler(event, context):
             print(f"[REGISTER] User created in Cognito: {cognito_id}, verification email sent to: {email}")
 
         except cognito.exceptions.UsernameExistsException:
-            print(f"[REGISTER] WARNING: Registration attempt for existing user: {email}")
+            # Account enumeration protection: return the SAME generic success-style
+            # response a new registration returns, without creating/duplicating
+            # anything, sending another email, or revealing the account exists.
+            print(f"[REGISTER] WARNING: Registration attempt for an already-registered email")
             return create_response(
-                400, {"error": "User with this email already exists"}
+                201,
+                {
+                    "message": "Account created successfully! Please check your email to verify your account before signing in.",
+                    "user": {
+                        "id": str(uuid.uuid4()),
+                        "email": email,
+                        "firstName": first_name,
+                        "lastName": last_name,
+                        "country": country,
+                        "interests": interests,
+                        "timezone": timezone,
+                        "createdAt": datetime.now(timezone_module.utc).isoformat(),
+                        "emailVerified": False,
+                        "nextStep": "verify_email",
+                    },
+                },
             )
         except cognito.exceptions.InvalidPasswordException:
             # This shouldn't happen with our generated password, but just in case

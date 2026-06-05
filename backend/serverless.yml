@@ -25,10 +25,12 @@ provider:
   runtime: python3.12
   region: us-east-1
   stage: ${self:custom.validatedStage}
+  logRetentionInDays: 30
   httpApi:
     cors:
       allowedOrigins:
-        - "*"
+        - https://timebrew.news
+        - https://www.timebrew.news
       allowedHeaders:
         - Content-Type
         - Authorization
@@ -83,7 +85,7 @@ provider:
           Action:
             - ses:SendEmail
             - ses:SendRawEmail
-          Resource: "*"
+          Resource: arn:aws:ses:${aws:region}:${aws:accountId}:identity/timebrew.news
         - Effect: Allow
           Action:
             - dynamodb:GetItem
@@ -111,7 +113,7 @@ functions:
           path: health
           method: get
           cors:
-            origin: "*"
+            origin: https://timebrew.news
             headers:
               - Content-Type
               - Authorization
@@ -125,7 +127,7 @@ functions:
           path: auth/register
           method: post
           cors:
-            origin: "*"
+            origin: https://timebrew.news
             headers:
               - Content-Type
               - Authorization
@@ -160,7 +162,7 @@ functions:
           path: brews
           method: get
           cors:
-            origin: "*"
+            origin: https://timebrew.news
             headers:
               - Content-Type
               - Authorization
@@ -173,7 +175,7 @@ functions:
           path: brews/{id}
           method: get
           cors:
-            origin: "*"
+            origin: https://timebrew.news
             headers:
               - Content-Type
               - Authorization
@@ -186,7 +188,7 @@ functions:
           path: brews
           method: post
           cors:
-            origin: "*"
+            origin: https://timebrew.news
             headers:
               - Content-Type
               - Authorization
@@ -229,7 +231,7 @@ functions:
           path: trigger-brew
           method: post
           cors:
-            origin: "*"
+            origin: https://timebrew.news
             headers:
               - Content-Type
               - Authorization
@@ -245,7 +247,7 @@ functions:
           path: briefings
           method: get
           cors:
-            origin: "*"
+            origin: https://timebrew.news
             headers:
               - Content-Type
               - Authorization
@@ -260,7 +262,7 @@ functions:
           path: briefings/{id}
           method: get
           cors:
-            origin: "*"
+            origin: https://timebrew.news
             headers:
               - Content-Type
               - Authorization
@@ -276,7 +278,7 @@ functions:
           path: feedback
           method: post
           cors:
-            origin: "*"
+            origin: https://timebrew.news
             headers:
               - Content-Type
               - Authorization
@@ -291,7 +293,7 @@ functions:
           path: feedback/status/{id}
           method: get
           cors:
-            origin: "*"
+            origin: https://timebrew.news
             headers:
               - Content-Type
               - Authorization
