@@ -62,14 +62,17 @@ provider:
   iam:
     role:
       statements:
-        # Only the actions register.py / auth middleware actually call,
-        # scoped to this pool.
+        # Only the actions register.py / auth middleware actually call. Scoped
+        # to user pools in this account via a constructed ARN (not !GetAtt) so
+        # the shared role does not depend on CognitoUserPool — the pool now
+        # depends on the Custom Message Lambda (which uses this role), and a
+        # !GetAtt here would close a role -> pool -> lambda -> role cycle.
         - Effect: Allow
           Action:
             - cognito-idp:SignUp
             - cognito-idp:GetUser
             - cognito-idp:AdminDeleteUser
-          Resource: !GetAtt CognitoUserPool.Arn
+          Resource: arn:aws:cognito-idp:${aws:region}:${aws:accountId}:userpool/*
         # Only StartExecution, scoped to our state machine. Use the constructed
         # ARN (not !Ref) to avoid a role -> state machine -> lambda -> role cycle.
         - Effect: Allow
@@ -127,6 +130,24 @@ functions:
               - Content-Type
               - Authorization
               - X-Requested-With
+
+  # Cognito Custom Message trigger — brands the verification / sign-in OTP
+  # emails Cognito sends (see api_endpoints/auth/custom_message.py). Wired to
+  # the pool via LambdaConfig.CustomMessage + a Lambda permission below.
+  cognitoCustomMessage:
+    handler: api_endpoints/auth/custom_message.handler
+    timeout: 10
+    memorySize: 128
+    # Dedicated minimal role (logs only) — this fn only formats email text.
+    role: CustomMessageLambdaRole
+    # Override the provider-level USER_POOL_ID / CLIENT_ID (which are
+    # !Ref CognitoUserPool / CognitoUserPoolClient) with literals here. The pool
+    # depends on this fn (LambdaConfig.CustomMessage), so a !Ref back to the
+    # pool/client in this fn's env would create a pool <-> fn cycle. This fn
+    # doesn't use them.
+    environment:
+      USER_POOL_ID: unused
+      CLIENT_ID: unused
 
   # Removed login, verifyOTP, resendVerification, and refreshToken functions
   # Frontend now uses AWS Amplify directly for authentication
@@ -497,6 +518,9 @@ resources:
           EmailSendingAccount: DEVELOPER
           SourceArn: arn:aws:ses:${self:provider.region}:${aws:accountId}:identity/timebrew.news
           From: ${env:SES_FROM_EMAIL, 'no-reply@timebrew.news'}
+        # Brand the codes Cognito emails (verification, sign-in OTP, etc.).
+        LambdaConfig:
+          CustomMessage: !GetAtt CognitoCustomMessageLambdaFunction.Arn
         Schema:
           - Name: email
             AttributeDataType: String
@@ -542,6 +566,30 @@ resources:
           - ALLOW_USER_PASSWORD_AUTH
           - ALLOW_REFRESH_TOKEN_AUTH
         PreventUserExistenceErrors: ENABLED
+
+    # Minimal logs-only role for the Custom Message Lambda (see note on the
+    # function). Deliberately references nothing, to avoid the pool cycle.
+    CustomMessageLambdaRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+    # Let Cognito invoke the Custom Message Lambda for this pool.
+    CognitoCustomMessagePermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        Action: lambda:InvokeFunction
+        FunctionName: !GetAtt CognitoCustomMessageLambdaFunction.Arn
+        Principal: cognito-idp.amazonaws.com
+        SourceArn: !GetAtt CognitoUserPool.Arn
 
     # Step Functions State Machine for AI Pipeline
     AIPipelineStateMachine:
