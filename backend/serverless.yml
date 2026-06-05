@@ -29,8 +29,7 @@ provider:
   httpApi:
     cors:
       allowedOrigins:
-        - https://timebrew.news
-        - https://www.timebrew.news
+        - "*"
       allowedHeaders:
         - Content-Type
         - Authorization
@@ -113,7 +112,7 @@ functions:
           path: health
           method: get
           cors:
-            origin: https://timebrew.news
+            origin: "*"
             headers:
               - Content-Type
               - Authorization
@@ -127,7 +126,7 @@ functions:
           path: auth/register
           method: post
           cors:
-            origin: https://timebrew.news
+            origin: "*"
             headers:
               - Content-Type
               - Authorization
@@ -162,7 +161,7 @@ functions:
           path: brews
           method: get
           cors:
-            origin: https://timebrew.news
+            origin: "*"
             headers:
               - Content-Type
               - Authorization
@@ -175,7 +174,7 @@ functions:
           path: brews/{id}
           method: get
           cors:
-            origin: https://timebrew.news
+            origin: "*"
             headers:
               - Content-Type
               - Authorization
@@ -188,7 +187,7 @@ functions:
           path: brews
           method: post
           cors:
-            origin: https://timebrew.news
+            origin: "*"
             headers:
               - Content-Type
               - Authorization
@@ -231,7 +230,7 @@ functions:
           path: trigger-brew
           method: post
           cors:
-            origin: https://timebrew.news
+            origin: "*"
             headers:
               - Content-Type
               - Authorization
@@ -247,7 +246,7 @@ functions:
           path: briefings
           method: get
           cors:
-            origin: https://timebrew.news
+            origin: "*"
             headers:
               - Content-Type
               - Authorization
@@ -262,7 +261,7 @@ functions:
           path: briefings/{id}
           method: get
           cors:
-            origin: https://timebrew.news
+            origin: "*"
             headers:
               - Content-Type
               - Authorization
@@ -278,7 +277,7 @@ functions:
           path: feedback
           method: post
           cors:
-            origin: https://timebrew.news
+            origin: "*"
             headers:
               - Content-Type
               - Authorization
@@ -293,7 +292,7 @@ functions:
           path: feedback/status/{id}
           method: get
           cors:
-            origin: https://timebrew.news
+            origin: "*"
             headers:
               - Content-Type
               - Authorization
