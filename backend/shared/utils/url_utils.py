@@ -8,9 +8,16 @@ import ipaddress
 import re
 import socket
 from concurrent.futures import ThreadPoolExecutor, wait
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 _TRACKING_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
+_SECTION_NAMES = {
+    "news", "business", "technology", "tech", "science", "politics", "world",
+    "economy", "economics", "markets", "finance", "health", "sports", "culture",
+    "entertainment", "opinion", "lifestyle", "travel", "education", "environment",
+    "climate", "space", "startups", "innovation", "newsroom", "latest",
+}
+_COLLECTION_PREFIXES = {"category", "categories", "topic", "topics", "tag", "tags", "search"}
 
 
 def safe_article_url(value):
@@ -62,6 +69,35 @@ def canonical_article_url(value):
     query = [(key, val) for key, val in parse_qsl(parts.query, keep_blank_values=True)
              if not key.lower().startswith("utm_") and key.lower() not in _TRACKING_KEYS]
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(sorted(query)), ""))
+
+
+def is_collection_url(value):
+    """Identify obvious publisher indexes that cannot be a full-story link.
+
+    This deliberately narrow URL-shape gate rejects home/section/topic pages,
+    even when a provider cites them. It does not prove other URLs are articles
+    or that their content supports a claim; that requires fetching the page.
+    Preserve common CMS article identity queries, including CMS installations
+    beneath a section path. Collection prefixes alone cannot disqualify deeper
+    article paths that happen to live within the publisher's category hierarchy.
+    """
+    canonical = canonical_article_url(value)
+    if not canonical:
+        return True
+    parts = urlsplit(canonical)
+    segments = [segment for segment in unquote(parts.path).lower().split("/") if segment]
+    article_query = any(
+        (key.lower() == "p" and val.isdigit()) or
+        (key.lower() in {"article_id", "story_id"} and re.fullmatch(r"[\w-]+", val))
+        for key, val in parse_qsl(parts.query)
+    )
+    if article_query:
+        return False
+    if not segments or segments in (["index.html"], ["index.htm"], ["index.php"]):
+        return True
+    return (len(segments) <= 2 and segments[0] in _COLLECTION_PREFIXES) or all(
+        segment in _SECTION_NAMES for segment in segments
+    )
 
 
 def url_host_resolves(url, timeout=5):

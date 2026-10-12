@@ -78,3 +78,16 @@ def test_curator_can_retry_story_not_in_delivered_history(curator_dependencies):
     result = news_curator.lambda_handler({"run_id": "run-1", "brew_id": "brew-1"}, None)
     assert result["body"]["articles_collected"] == 2
     mocks["update_run_stage"].assert_called_once_with("run-1", "editor")
+
+
+def test_curator_with_only_a_section_citation_withholds_email(curator_dependencies):
+    mocks, response = curator_dependencies
+    url = "https://news.example.com/business/technology"
+    response["content"] = json.dumps({"articles": [{
+        "headline": "A synthetic product announcement", "summary": "A product was announced.", "url": url,
+    }], "curator_notes": "Found a general section page only."})
+    response["citations"] = [url]
+    with pytest.raises(ValueError, match="withheld rather than fabricated"):
+        news_curator.lambda_handler({"run_id": "run-1", "brew_id": "brew-1"}, None)
+    assert mocks["update_curator_log"].call_args.args[1] == []
+    assert mocks["update_run_stage"].call_args.args == ("run-1", "failed")

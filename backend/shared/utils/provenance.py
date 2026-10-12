@@ -10,7 +10,7 @@ import re
 from datetime import date, datetime, timezone
 from urllib.parse import urlsplit
 
-from shared.utils.url_utils import canonical_article_url
+from shared.utils.url_utils import canonical_article_url, is_collection_url
 
 UNKNOWN_PUBLICATION = "Publication date unavailable"
 PROVENANCE_VERSION = 1
@@ -135,6 +135,8 @@ def curate_with_provenance(articles, provider_response, *, desired_count=5,
             url = canonical_article_url(candidate.get("url"))
             if not url or url not in evidence:
                 raise ValueError("URL has no matching provider citation")
+            if is_collection_url(url):
+                raise ValueError("Source must link to a specific article, not a publisher collection")
             if url in seen_urls or _headline_identity(headline) in seen_titles:
                 raise ValueError("Article repeats a previously selected or delivered story")
             source_record = evidence[url]
@@ -190,6 +192,8 @@ def validate_curated_articles(articles):
         provenance = article.get("provenance")
         if not url or not isinstance(provenance, dict):
             raise ValueError("Missing curated source provenance")
+        if is_collection_url(url):
+            raise ValueError("Curated source must link to a specific article, not a publisher collection")
         if (provenance.get("version") != PROVENANCE_VERSION or
                 provenance.get("evidence_type") != "provider_citation" or
                 provenance.get("citation_url") != url or article.get("url") != url or

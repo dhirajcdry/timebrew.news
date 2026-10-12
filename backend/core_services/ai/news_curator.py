@@ -95,7 +95,8 @@ publication window, diverse sources and distinct events. Never invent a story, U
 date, quote, statistic, or source. Return fewer than {count} if evidence is thin,
 and an empty articles array when nothing qualifies. A quota never overrides evidence.
 
-All article URLs MUST be present in your actual search citations. Summaries must be
+All article URLs MUST be present in your actual search citations and link directly
+to a specific article, never a publisher homepage, section, topic or search page. Summaries must be
 supported by those articles. Prefer known publication dates. Do not claim that a
 story is new when its publication date is unavailable. No news aggregators.
 

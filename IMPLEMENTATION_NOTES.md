@@ -17,6 +17,9 @@ branch and draft pull request; no production merge or deployment is included.
 - Curation retains the provider's separate citation/search metadata. Articles
   must match that evidence and a conservative public-URL policy. Stable source IDs
   bind final stories to their original URL, publisher domain, and publication metadata.
+- Recognizable homepage, section, category, topic, and search URLs are rejected as
+  full-story sources, even when cited. This is a narrow URL-shape check, not a
+  guarantee that every other link is an article; query-based article IDs remain usable.
 - No restored rejected links, invented relative timestamps, or empty-day filler.
   Known out-of-window dates are rejected; unknown dates stay explicitly unavailable.
   An empty/unprovenanced source set withholds the email and records a failed run.
@@ -32,8 +35,10 @@ branch and draft pull request; no production merge or deployment is included.
 
 ## Checks performed
 
-- Backend: 142 offline regression tests passed. Network connections are disabled
+- Backend: 160 offline regression tests passed. Network connections are disabled
   by the test fixture; provider, database and SES calls are mocked.
+- Synthetic email regressions cover trailing inline `**Takeaway:**` text with and
+  without a separate takeaway field: HTML formatting and plain text are readable.
 - Python compilation and `git diff --check`: passed.
 - Frontend TypeScript/production build: passed.
 - ESLint: zero errors, with 65 existing-style warnings in auth/dashboard/common

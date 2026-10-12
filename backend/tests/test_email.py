@@ -87,6 +87,28 @@ def test_editorial_hierarchy_and_plain_text(draft):
     assert "Prepared with AI." in html and "Prepared with AI." in text
 
 
+@pytest.mark.parametrize("separate_takeaway", [None, "A separate **synthetic point**."])
+def test_trailing_inline_takeaway_renders_without_literal_markdown(draft, separate_takeaway):
+    article = draft["articles"][0]
+    article["story_content"] = "Synthetic story.\n\n**Takeaway:** Synthetic takeaway."
+    article.pop("takeaway")
+    if separate_takeaway is not None:
+        article["takeaway"] = separate_takeaway
+
+    html = format_email_html(draft, "Synthetic brew", NOW)
+    text = format_email_text(draft, "Synthetic brew", NOW)
+
+    assert "<strong>Takeaway:</strong> Synthetic takeaway.</p>" in html
+    assert "Synthetic story.\n\nTakeaway: Synthetic takeaway." in text
+    assert "**" not in html + text
+    assert html.count("Synthetic takeaway.") == text.count("Synthetic takeaway.") == 1
+    if separate_takeaway is not None:
+        assert "<strong>The takeaway</strong><br>A separate <strong>synthetic point</strong>." in html
+        assert "The takeaway: A separate synthetic point." in text
+    else:
+        assert "The takeaway" not in html + text
+
+
 def test_untrusted_text_cannot_inject_html_or_add_links(draft):
     draft["intro"] = '<img src=x onerror="alert(1)">'
     draft["articles"][0].update({

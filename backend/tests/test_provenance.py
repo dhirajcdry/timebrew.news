@@ -7,7 +7,7 @@ import pytest
 
 from shared.utils.provenance import (
     UNKNOWN_PUBLICATION, curate_with_provenance, normalize_publication_date,
-    provider_sources, requested_article_count, validate_curated_articles,
+    provider_sources, requested_article_count, source_id_for_url, validate_curated_articles,
     validate_editor_draft,
 )
 from shared.utils.url_utils import canonical_article_url, filter_live_article_urls, safe_article_url, url_host_resolves
@@ -65,6 +65,36 @@ def test_dns_check_does_not_change_global_timeout_and_rejects_private_ip():
 def test_model_json_citations_and_resolving_domain_are_not_evidence():
     assert curate_with_provenance([candidate(citations=[URL])], {"content": '{"citations": ["' + URL + '"]}'}, now=NOW)[0] == []
     assert curate_with_provenance([candidate()], {"citations": ["https://news.example.com/different-page"]}, now=NOW)[0] == []
+
+
+@pytest.mark.parametrize("path", ["/", "/news/", "/business/technology", "/Business/Technology/",
+    "/business/technology?utm_source=fixture", "/category/robotics", "/topics/new-products"])
+def test_section_citations_are_not_full_story_sources(path):
+    url = "https://news.example.com" + path
+    sources, reasons = curate_with_provenance([candidate(url)], {"citations": [url]}, now=NOW)
+    assert sources == []
+    assert "article" in reasons[0].lower()
+
+
+@pytest.mark.parametrize("path", ["/business/technology/a-specific-product-launch", "/science/a-new-mission",
+    "/?p=123", "/index.php?article_id=abc-123", "/news/?p=123",
+    "/category/robotics/2026/10/12/a-specific-product-launch"])
+def test_article_paths_and_query_identity_remain_eligible(path):
+    url = "https://news.example.com" + path
+    sources, reasons = curate_with_provenance([candidate(url)], {"citations": [url]}, now=NOW)
+    assert len(sources) == 1
+    assert reasons == []
+
+
+@pytest.mark.parametrize("path", ["/business/technology", "/category/robotics"])
+def test_persisted_collection_sources_cannot_bypass_final_validation(path):
+    sources = curated()
+    url = "https://news.example.com" + path
+    sources[0]["url"] = url
+    sources[0]["source_id"] = source_id_for_url(url)
+    sources[0]["provenance"]["citation_url"] = url
+    with pytest.raises(ValueError, match="specific article"):
+        validate_editor_draft(draft(sources), sources)
 
 
 def test_provider_annotation_is_preserved_and_model_date_is_ignored():
