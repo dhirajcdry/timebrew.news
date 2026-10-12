@@ -9,7 +9,7 @@ from shared.db.queries import (
     get_active_run_for_brew,
     create_run,
 )
-from shared.utils.dynamo import parse_dt
+from shared.utils.dynamo import parse_dt, to_int
 from shared.middleware.auth import authenticate_user, validate_ownership
 # from shared.utils.logger import Logger
 
@@ -25,6 +25,7 @@ def build_run_snapshot(brew, user):
         "brew_name": brew.get("name"),
         "topics": brew.get("topics") if isinstance(brew.get("topics"), list) else [],
         "delivery_time": brew.get("delivery_time"),
+        "article_count": max(1, min(10, to_int(brew.get("article_count"), 5))),
     }
 
 

@@ -47,5 +47,10 @@ __pycache__/
 
 texts.txt
 
+# Local verification output
+.pytest_cache/
+frontend/playwright-report/
+frontend/test-results/
+
 # Claude Code local
 .claude/

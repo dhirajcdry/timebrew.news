@@ -53,3 +53,18 @@ def format_list_simple(items, separator=", ", final_separator=" and "):
         return f"{items[0]}{final_separator}{items[1]}"
     else:
         return separator.join(items[:-1]) + f",{final_separator}{items[-1]}"
+
+def normalize_topics(value):
+    """Accept stored topic arrays/JSON without treating a string as characters."""
+    import json
+
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            raise ValueError("Topics must be a JSON array of text")
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(topic, str) for topic in value):
+        raise ValueError("Topics must be an array of text")
+    return list(dict.fromkeys(topic.strip() for topic in value if topic.strip()))

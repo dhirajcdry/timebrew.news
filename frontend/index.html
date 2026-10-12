@@ -1,94 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-
-		<!-- TimeBrew Favicon -->
-		<link rel="icon" type="image/svg+xml" href="/coffee-icon.svg" />
-		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-		<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
-		<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
-
-		<!-- Viewport and Theme -->
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<meta name="theme-color" content="#a3e635" />
-
-		<!-- TimeBrew Branding -->
-		<title>TimeBrew - Your Personalized News Brew, on Your Clock</title>
-		<meta
-			name="description"
-			content="Choose up to 3 daily news brews, set the time, pick 3-8 stories each. AI-curated digests with zero info-overload, just what you'll actually read."
-		/>
-		<meta
-			name="keywords"
-			content="news digest, personalized news, AI news, daily briefing, custom news, TimeBrew"
-		/>
-		<meta name="author" content="TimeBrew" />
-
-		<!-- Open Graph / Social Media -->
-		<meta property="og:type" content="website" />
-		<meta
-			property="og:title"
-			content="TimeBrew - Your Personalized News Brew"
-		/>
-		<meta
-			property="og:description"
-			content="AI-powered news digests tailored to your schedule. Up to 3 daily brews, custom article count, zero overload."
-		/>
-		<meta property="og:image" content="/timebrew-og-image.png" />
-		<meta property="og:url" content="https://timebrew.news" />
-		<meta property="og:site_name" content="TimeBrew" />
-
-		<!-- Twitter Card -->
-		<meta name="twitter:card" content="summary_large_image" />
-		<meta
-			name="twitter:title"
-			content="TimeBrew - Your Personalized News Brew"
-		/>
-		<meta
-			name="twitter:description"
-			content="AI-powered news digests tailored to your schedule. Up to 3 daily brews, custom article count, zero overload."
-		/>
-		<meta name="twitter:image" content="/timebrew-twitter-image.png" />
-
-		<!-- Font Preconnect for Performance -->
-		<link rel="preconnect" href="https://fonts.googleapis.com" />
-		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-
-		<!-- Custom Font -->
-		<link
-			href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap"
-			rel="stylesheet"
-		/>
-
-		<!-- Additional Performance & SEO -->
-		<link rel="canonical" href="https://timebrew.news" />
-		<meta name="robots" content="index, follow" />
-		<meta name="googlebot" content="index, follow" />
-
-		<!-- PWA Support -->
-		<link rel="manifest" href="/manifest.json" />
-
-		<!-- Structured Data for Rich Snippets -->
-		<script type="application/ld+json">
-			{
-				"@context": "https://schema.org",
-				"@type": "WebApplication",
-				"name": "TimeBrew",
-				"description": "AI-powered personalized news digest service",
-				"url": "https://timebrew.news",
-				"applicationCategory": "NewsApplication",
-				"operatingSystem": "Web Browser",
-				"offers": {
-					"@type": "Offer",
-					"price": "0",
-					"priceCurrency": "USD"
-				}
-			}
-		</script>
-	</head>
-	<body>
-		<div id="root"></div>
-		<script type="module" src="/src/main.tsx"></script>
-	</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f8f5ed" />
+    <title>TimeBrew — A little more perspective. A lot less scroll.</title>
+    <meta name="description" content="The stories you care about, brewed into a personal news digest. Choose your topics and delivery time, then catch up in your inbox with TimeBrew." />
+    <meta name="author" content="TimeBrew" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="TimeBrew — A little more perspective. A lot less scroll." />
+    <meta property="og:description" content="A personal news digest, made for your routine. Pick your topics, choose your time, and make room for the rest of your day." />
+    <meta property="og:url" content="https://timebrew.news" />
+    <meta property="og:site_name" content="TimeBrew" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="TimeBrew — Your daily news ritual" />
+    <meta name="twitter:description" content="The stories you care about, brewed into a personal digest and delivered to your inbox." />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2353684b'/%3E%3Cg fill='none' stroke='%23f8f5ed' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17 27h28v13a10 10 0 0 1-10 10h-8a10 10 0 0 1-10-10zM45 28h3a7 7 0 0 1 0 14h-3M24 14v5M32 12v7M40 14v5'/%3E%3C/g%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;650;700&family=Fraunces:ital,wght@0,400;0,500;0,600;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="canonical" href="https://timebrew.news" />
+    <meta name="robots" content="index, follow" />
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"TimeBrew","description":"Personalized news digests delivered by email","url":"https://timebrew.news","applicationCategory":"NewsApplication","operatingSystem":"Web Browser"}</script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

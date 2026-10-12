@@ -1,14 +1,17 @@
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { lazy, Suspense } from "react";
 import Navbar from "./components/common/Navbar";
 import Footer from "./components/common/Footer";
 import LandingPage from "./components/pages/landing/LandingPage";
-import Signup from "./components/pages/auth/Signup";
-import Login from "./components/pages/auth/Signin";
-import Dashboard from "./components/pages/dashboard/Dashboard";
-import CreateBrew from "./components/pages/dashboard/CreateBrew";
-import BrewDetails from "./components/pages/dashboard/BrewDetails";
 import ProtectedRoute from "./components/common/ProtectedRoute";
 import { AuthProvider } from "./contexts/AuthContext";
+
+// Keep the public first impression lean; account/dashboard code loads on demand.
+const Signup = lazy(() => import("./components/pages/auth/Signup"));
+const Login = lazy(() => import("./components/pages/auth/Signin"));
+const Dashboard = lazy(() => import("./components/pages/dashboard/Dashboard"));
+const CreateBrew = lazy(() => import("./components/pages/dashboard/CreateBrew"));
+const BrewDetails = lazy(() => import("./components/pages/dashboard/BrewDetails"));
 
 const App = () => {
 	return (
@@ -17,6 +20,7 @@ const App = () => {
 				<div className="min-h-screen flex flex-col bg-gradient-to-br from-background via-card to-muted text-foreground">
 				<Navbar />
 				<main className="flex-1">
+						<Suspense fallback={<p role="status" className="px-6 py-32 text-center">Loading your next page…</p>}>
 					<Routes>
 						{/* Public Routes */}
 						<Route path="/" element={<LandingPage />} />
@@ -31,6 +35,7 @@ const App = () => {
 							{/* Add more protected routes here */}
 						</Route>
 					</Routes>
+						</Suspense>
 				</main>
 				<Footer />
 			</div>

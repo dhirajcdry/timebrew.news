@@ -1,65 +1,104 @@
-"""URL validation helpers (stdlib-only, Lambda-safe — no extra requirements).
+"""Conservative public-news URL helpers.
 
-We deliberately validate URLs by DNS resolution of their host, NOT by fetching
-them. An HTTP fetch from inside Lambda is unreliable as a liveness signal: major
-publishers (TechCrunch, Bloomberg, Guardian, …) time out or block AWS egress IPs,
-and many serve soft-404s (HTTP 200 on a missing page). Both produce false signals.
-DNS resolution, by contrast, is fast, isn't bot-blocked, and cleanly catches the
-dominant hallucination failure mode — an invented domain that doesn't exist
-(NXDOMAIN) — without dropping real articles that merely reject our user-agent.
+DNS is only a reachability check, never proof an article exists or supports a
+claim. Provider citation provenance is checked separately in ``provenance``.
+No filter is allowed to restore rejected links to fill a briefing.
 """
+import ipaddress
+import re
 import socket
-from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+_TRACKING_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
+
+
+def safe_article_url(value):
+    """Return a normalized public HTTP(S) URL, or None (without network I/O).
+
+    This is a link-policy check, not an SSRF-safe HTTP fetching primitive. Any
+    future fetcher must also validate resolved IPs and every redirect.
+    """
+    if not isinstance(value, str) or not value or len(value) > 4096:
+        return None
+    if re.search(r"[\s\\\x00-\x1f\x7f<>\"']|%(?:0[0-9a-f]|1[0-9a-f]|7f)", value, re.IGNORECASE):
+        return None
+    try:
+        parts = urlsplit(value)
+        if parts.scheme.lower() not in {"http", "https"} or parts.username or parts.password:
+            return None
+        host = parts.hostname
+        if not host or parts.port not in (None, 80, 443):
+            return None
+        host = host.encode("idna").decode("ascii").lower().rstrip(".")
+        if host == "localhost" or host.endswith((".localhost", ".local", ".internal", ".test", ".invalid")):
+            return None
+        # News sources are named public hosts, never IP literals or numeric aliases.
+        try:
+            ipaddress.ip_address(host)
+            return None
+        except ValueError:
+            pass
+        labels = host.split(".")
+        if len(labels) < 2 or labels[-1].isdigit() or any(
+            not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+            for label in labels
+        ):
+            return None
+        scheme = parts.scheme.lower()
+        port = parts.port
+        authority = host if port is None or (scheme, port) in {("https", 443), ("http", 80)} else f"{host}:{port}"
+        return urlunsplit((scheme, authority, parts.path or "/", parts.query, ""))
+    except (ValueError, UnicodeError):
+        return None
+
+
+def canonical_article_url(value):
+    """Identity URL: preserve meaningful query parameters, remove trackers."""
+    safe = safe_article_url(value)
+    if not safe:
+        return None
+    parts = urlsplit(safe)
+    query = [(key, val) for key, val in parse_qsl(parts.query, keep_blank_values=True)
+             if not key.lower().startswith("utm_") and key.lower() not in _TRACKING_KEYS]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(sorted(query)), ""))
 
 
 def url_host_resolves(url, timeout=5):
-    """True if the URL is well-formed and its host resolves in DNS.
+    """Whether a safe URL resolves exclusively to public IPs.
 
-    A real article on a real publisher resolves even if the page 404s or blocks
-    bots; a hallucinated domain raises NXDOMAIN (socket.gaierror) -> False.
+    ``timeout`` is retained for caller compatibility. The OS resolver controls
+    individual DNS calls; the batch filter bounds its wait without changing the
+    process-wide socket timeout (which is unsafe under concurrent Lambda work).
     """
-    if not url or not isinstance(url, str):
+    safe = safe_article_url(url)
+    if not safe:
         return False
     try:
-        host = urlparse(url).hostname
-    except Exception:
+        addresses = socket.getaddrinfo(urlsplit(safe).hostname, None)
+        return bool(addresses) and all(ipaddress.ip_address(item[4][0]).is_global for item in addresses)
+    except (ValueError, socket.gaierror, socket.herror, OSError):
         return False
-    if not host:
-        return False
-    old = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(timeout)
-    try:
-        socket.getaddrinfo(host, None)
-        return True
-    except (socket.gaierror, socket.herror, OSError):
-        return False
-    finally:
-        socket.setdefaulttimeout(old)
 
 
 def filter_live_article_urls(articles, min_keep=1, timeout=5):
-    """Drop articles whose URL host doesn't resolve (likely hallucinated domain).
+    """Return (kept, rejected), never reinstating rejected or timed-out URLs.
 
-    Resolves hosts concurrently. Has a safety floor: if filtering would leave
-    fewer than `min_keep` articles but we started with some, the original list is
-    kept unchanged — a possibly-stale link beats an empty briefing on a false
-    negative.
-
-    Returns (kept_articles, dropped_articles).
+    Historical ``min_keep`` is ignored: a quota cannot bypass a safety check.
+    DNS success does not establish HTTP liveness or article provenance.
     """
     if not articles:
-        return articles, []
-
-    urls = [a.get("url") for a in articles]
-    with ThreadPoolExecutor(max_workers=min(8, len(urls))) as ex:
-        ok = list(ex.map(lambda u: url_host_resolves(u, timeout), urls))
-
-    kept = [a for a, good in zip(articles, ok) if good]
-    dropped = [a for a, good in zip(articles, ok) if not good]
-
-    if len(kept) < min_keep and articles:
-        # Don't trust the filter to empty out an otherwise-good run.
-        return articles, []
-
-    return kept, dropped
+        return [], []
+    executor = ThreadPoolExecutor(max_workers=min(8, len(articles)))
+    futures = [executor.submit(url_host_resolves, a.get("url"), timeout)
+               if isinstance(a, dict) else None for a in articles]
+    completed, _ = wait([f for f in futures if f is not None], timeout=timeout)
+    good = []
+    for future in futures:
+        try:
+            good.append(future in completed and bool(future.result()))
+        except Exception:
+            good.append(False)
+    executor.shutdown(wait=False, cancel_futures=True)
+    return ([a for a, ok in zip(articles, good) if ok],
+            [a for a, ok in zip(articles, good) if not ok])

@@ -11,7 +11,7 @@ class BrewsGetHandler(BaseHandler):
             brews = []
             for brew_row in brews_data:
                 (
-                    brew_id, name, topics, delivery_time, created_at, is_active, briefings_sent
+                    brew_id, name, topics, delivery_time, created_at, is_active, briefings_sent, article_count
                 ) = brew_row
                 
                 # Parse topics if it's a string (handle legacy data)
@@ -23,6 +23,7 @@ class BrewsGetHandler(BaseHandler):
                     "topics": topics_list,
                     "delivery_time": str(delivery_time) if delivery_time else None,
                     "briefings_sent": briefings_sent,
+                    "article_count": article_count,
                     "is_active": is_active,
                     "created_at": created_at.isoformat() if created_at else None,
                 })

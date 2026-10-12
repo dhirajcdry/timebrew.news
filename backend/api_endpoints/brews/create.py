@@ -11,9 +11,17 @@ class BrewsCreateHandler(BaseHandler):
             return error
         
         # Validate required fields
-        name = body.get("name", "").strip()
+        if not isinstance(body, dict):
+            return self.error_response(400, "Request body must be an object")
+        name = body.get("name", "")
         topics = body.get("topics", [])
-        delivery_time = body.get("delivery_time", "").strip()
+        delivery_time = body.get("delivery_time", "")
+        article_count = body.get("article_count", 5)
+        if not isinstance(name, str) or not isinstance(delivery_time, str):
+            return self.error_response(400, "Name and delivery time must be strings")
+        name, delivery_time = name.strip(), delivery_time.strip()
+        if type(article_count) is not int or not 1 <= article_count <= 10:
+            return self.error_response(400, "Article count must be an integer from 1 to 10")
         
         if not name:
             return self.error_response(400, "Brew name is required")
@@ -50,7 +58,7 @@ class BrewsCreateHandler(BaseHandler):
         try:
             # Create brew using optimized query
             brew_id = OptimizedQueries.create_brew(
-                self.user_data["id"], name, topics, delivery_time
+                self.user_data["id"], name, topics, delivery_time, article_count
             )
             
             return self.success_response({
@@ -58,7 +66,8 @@ class BrewsCreateHandler(BaseHandler):
                 "brew_id": str(brew_id),
                 "name": name,
                 "topics": topics,
-                "delivery_time": delivery_time
+                "delivery_time": delivery_time,
+                "article_count": article_count,
             })
             
         except Exception:

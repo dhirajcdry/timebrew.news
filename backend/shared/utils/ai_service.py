@@ -100,16 +100,22 @@ class AIService:
                     max_tokens=max_tokens,
                 )
 
-                content = response.choices[0].message.content
+                message = response.choices[0].message
+                content = message.content
+                if not isinstance(content, str) or not content.strip():
+                    raise AIServiceError("OpenRouter returned no text content")
                 finish_reason = response.choices[0].finish_reason
                 print(f"[AI_SERVICE] OpenRouter response received - response_length: {len(content)}, model: {model}, attempt: {attempt + 1}, finish_reason: {finish_reason}")
 
-                # A "length" finish means max_tokens cut the response off mid-way,
-                # which usually yields truncated/invalid JSON. Surface it loudly
-                # instead of letting the downstream JSON parse fail cryptically.
-                if finish_reason == "length":
-                    print(f"[AI_SERVICE] WARNING: Response truncated by max_tokens={max_tokens} (finish_reason=length) — output is likely incomplete JSON")
+                # A partial, filtered, or tool-only response must never become a
+                # newsletter merely because its text happens to parse as JSON.
+                if finish_reason != "stop":
+                    raise AIServiceError(f"OpenRouter response did not complete normally ({finish_reason})")
 
+                # Preserve only provider envelope metadata. Never extract evidence
+                # from generated content: the model can invent a citations array.
+                envelope = response.model_dump()
+                message_data = message.model_dump()
                 return {
                     "content": content,
                     "model": model,
@@ -117,6 +123,9 @@ class AIService:
                     "usage": response.usage.model_dump() if response.usage else {},
                     "finish_reason": finish_reason,
                     "raw_response": None,
+                    "citations": envelope.get("citations") or [],
+                    "search_results": envelope.get("search_results") or [],
+                    "annotations": message_data.get("annotations") or [],
                 }
 
             # OpenRouter routinely returns transient 5xx (InternalServerError)

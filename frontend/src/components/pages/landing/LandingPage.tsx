@@ -1,19 +1,19 @@
-import React from "react";
+import { useCallback, useState } from "react";
 import FirstPage from "./FirstPage";
 import SecondPage from "./SecondPage";
 import ThirdPage from "./ThirdPage";
-import Background from "@/components/common/Background";
+import SampleDigest from "./SampleDigest";
 
-const LandingPage = () => {
-	return (
-		<Background variant="hero" showDotPattern={true} showFloatingDots={true}>
-			<div className="min-h-screen">
-				<FirstPage />
-				{/* <SecondPage /> */}
-				{/* <ThirdPage /> */}
-			</div>
-		</Background>
-	);
-};
+export default function LandingPage() {
+  const [sampleOpen, setSampleOpen] = useState(false);
+  const closeSample = useCallback(() => setSampleOpen(false), []);
 
-export default LandingPage;
+  return (
+    <div className="tb-landing" id="landing-content" tabIndex={-1}>
+      <FirstPage onOpenSample={() => setSampleOpen(true)} />
+      <SecondPage />
+      <ThirdPage />
+      <SampleDigest isOpen={sampleOpen} onClose={closeSample} />
+    </div>
+  );
+}

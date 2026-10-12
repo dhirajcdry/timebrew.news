@@ -193,7 +193,7 @@ const Signup: React.FC = () => {
 
 	const validateStep = (step: number): boolean => {
 		switch (step) {
-			case 1:
+			case 1: {
 				// Check if email is valid in addition to other fields
 				const isValid = !!(
 					formData.firstName &&
@@ -206,6 +206,7 @@ const Signup: React.FC = () => {
 				// We'll only show email validation errors when the field is blurred or form is submitted
 				// Not while the user is still typing
 				return isValid;
+			}
 			case 2:
 				return formData.interests.length > 0;
 			default:
