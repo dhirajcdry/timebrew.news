@@ -1,0 +1,34 @@
+{
+  "subject": "Historical sample: an ocean world, everyday AI, and a Nobel moment",
+  "intro": "Pour something good. Here's a taste of your personal briefing: three big ideas, the context that matters, and a clear path to the original reporting. This is a historical sample, not a current news edition.",
+  "articles": [
+    {
+      "headline": "An ocean world. A very big question.",
+      "story_content": "NASA launched Europa Clipper toward Jupiter's icy moon to investigate whether its hidden ocean could support life. The mission will study Europa's ice, ocean, and geology. **The question is habitability:** this mission isn't designed to detect life itself.",
+      "takeaway": "A closer look at one of the most intriguing places beyond Earth.",
+      "source": "nasa.gov",
+      "original_url": "https://www.nasa.gov/news-release/liftoff-nasas-europa-clipper-sails-toward-ocean-moon-of-jupiter/",
+      "published_at": "2024-10-14",
+      "type": "news"
+    },
+    {
+      "headline": "AI moves into everyday tools.",
+      "story_content": "Apple introduced Apple Intelligence with writing, proofreading, and summarization features for iPhone, iPad, and Mac. Its announced approach combined on-device processing with Private Cloud Compute for more demanding requests. The announcement marked a move to bring generative AI into familiar apps.",
+      "takeaway": "The interface for AI can be the tools people already use.",
+      "source": "apple.com",
+      "original_url": "https://www.apple.com/newsroom/2024/06/introducing-apple-intelligence-for-iphone-ipad-and-mac/",
+      "published_at": "2024-06-10",
+      "type": "news"
+    },
+    {
+      "headline": "A Nobel moment for protein science.",
+      "story_content": "The 2024 Nobel Prize in Chemistry recognized David Baker for designing new proteins, and Demis Hassabis and John Jumper for predicting protein structures. Their work gave researchers powerful ways to understand and create the tiny molecular tools that make life possible.",
+      "takeaway": "Computation is opening new doors for biological research.",
+      "source": "kva.se",
+      "original_url": "https://www.kva.se/en/news/the-nobel-prize-in-chemistry-2024/",
+      "published_at": "2024-10-09",
+      "type": "news"
+    }
+  ],
+  "outro": "That's your pause for perspective. Let the ideas steep."
+}

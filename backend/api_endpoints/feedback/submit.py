@@ -1,5 +1,5 @@
 from shared.base import BaseHandler
-from shared.db.queries import OptimizedQueries
+from shared.db.queries import OptimizedQueries, get_editor_log_by_editorial_id
 import traceback
 
 
@@ -85,7 +85,9 @@ class FeedbackSubmitHandler(BaseHandler):
             elif feedback_type == "article":
                 # Article feedback - get article details from request
                 article_position = body.get("article_position")
-                article_data = body.get("article_data", {})
+                # Resolve article identity from the owned saved briefing. Client
+                # supplied titles/URLs are not reliable personalization evidence.
+                article_data = {}
                 
                 print(f"[FEEDBACK] Processing article feedback - article_position: {article_position}, article_data_keys: {list(article_data.keys()) if article_data else []}")
                 
@@ -94,13 +96,19 @@ class FeedbackSubmitHandler(BaseHandler):
                     return self.error_response(400, "article_position is required for article feedback")
                 
                 try:
-                    article_position = int(article_position)
-                    if article_position < 0:
+                    if type(article_position) is not int or article_position < 0:
                         raise ValueError("Article position cannot be negative")
                     print(f"[FEEDBACK] Article position validated: {article_position}")
                 except (ValueError, TypeError) as e:
                     print(f"[FEEDBACK] ERROR: Invalid article_position: {article_position}, error: {str(e)}")
                     return self.error_response(400, "article_position must be a non-negative integer")
+
+                editorial = get_editor_log_by_editorial_id(editorial_id)
+                content = (editorial or {}).get("editorial_content") or {}
+                articles = content.get("articles", [])
+                if article_position >= len(articles):
+                    return self.error_response(400, "Article position is outside this briefing")
+                article_data = articles[article_position]
                 
                 print(f"[FEEDBACK] Submitting article feedback - user_id: {self.user_data['id']}, editorial_id: {editorial_id}, feedback_value: {feedback_value}, article_position: {article_position}")
                 print(f"[FEEDBACK] Article data - source_url: {article_data.get('original_url')}, title: {article_data.get('headline')}, source: {article_data.get('source')}")

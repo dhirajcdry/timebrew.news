@@ -23,12 +23,14 @@ Table / index layout (see backend/serverless.yml):
 import json
 
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 from shared.utils.dynamo import (
     table,
     new_id,
     now_iso,
     parse_dt,
+    to_iso,
     to_int,
     compact,
 )
@@ -131,15 +133,27 @@ def list_active_brews():
 
 
 def update_brew_last_sent(user_id, brew_id, sent_at_iso):
-    """Record the last successful delivery time and bump the briefings counter."""
-    table("brews").update_item(
-        Key={"user_id": user_id, "id": brew_id},
-        UpdateExpression=(
-            "SET last_sent_date = :d, updated_at = :u "
-            "ADD briefings_sent :one"
-        ),
-        ExpressionAttributeValues={":d": sent_at_iso, ":u": now_iso(), ":one": 1},
-    )
+    """Record a delivery once, safely retrying dispatcher bookkeeping.
+
+    Store canonical UTC timestamps and never move a newer delivery backwards.
+    A replay of the persisted sent timestamp must not increment the counter.
+    """
+    sent_at = to_iso(parse_dt(sent_at_iso))
+    if not sent_at:
+        raise ValueError("A valid sent timestamp is required")
+    try:
+        table("brews").update_item(
+            Key={"user_id": user_id, "id": brew_id},
+            UpdateExpression=(
+                "SET last_sent_date = :d, updated_at = :u "
+                "ADD briefings_sent :one"
+            ),
+            ConditionExpression="attribute_not_exists(last_sent_date) OR last_sent_date < :d",
+            ExpressionAttributeValues={":d": sent_at, ":u": now_iso(), ":one": 1},
+        )
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
 
 
 # =============================================================================
@@ -252,18 +266,31 @@ def get_curator_log(run_id):
 
 
 def list_recent_curator_articles_for_user(user_id, limit=5):
-    """Return [(articles_list, updated_at_datetime)] for a user's most recent
-    curator logs — used to build the curator's no-repeat list."""
-    resp = table("curator_logs").query(
-        IndexName="user-index",
-        KeyConditionExpression=Key("user_id").eq(user_id),
-        ScanIndexForward=False,
-        Limit=limit,
-    )
+    """Return only articles the reader actually received, with delivery dates.
+
+    Curator logs alone include failed/withheld runs. Excluding those stories
+    would suppress unseen news after an editor or delivery failure.
+    """
     out = []
-    for item in resp.get("Items", []):
-        out.append((_load_json(item.get("raw_articles"), []),
-                    parse_dt(item.get("created_at"))))
+    kwargs = {
+        "IndexName": "user-index",
+        "KeyConditionExpression": Key("user_id").eq(user_id),
+        "ScanIndexForward": False,
+        "Limit": max(1, limit),
+    }
+    while len(out) < limit:
+        resp = table("curator_logs").query(**kwargs)
+        for item in resp.get("Items", []):
+            editor = get_editor_log(item.get("run_id"))
+            if not editor or not editor.get("email_sent"):
+                continue
+            out.append((_load_json(item.get("raw_articles"), []),
+                        parse_dt(editor.get("email_sent_time"))))
+            if len(out) == limit:
+                break
+        if "LastEvaluatedKey" not in resp:
+            break
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
     return out
 
 
@@ -341,8 +368,10 @@ def get_editor_log_by_editorial_id(editorial_id):
 
 
 def get_latest_completed_draft_for_brew(brew_id, exclude_run_id=None):
-    """Most recent prior editorial raw response for a brew (for editor context).
-    Returns (raw_llm_response, completed_at_datetime) or None."""
+    """Most recent delivered, validated editorial for historical context.
+    Returns (editorial_json, sent_at_datetime) or None. Failed drafts are never
+    represented to the editor as news the reader has already received.
+    """
     resp = table("editor_logs").query(
         IndexName="brew-index",
         KeyConditionExpression=Key("brew_id").eq(brew_id),
@@ -352,8 +381,9 @@ def get_latest_completed_draft_for_brew(brew_id, exclude_run_id=None):
     for item in resp.get("Items", []):
         if item.get("run_id") == exclude_run_id:
             continue
-        if item.get("raw_llm_response"):
-            return item.get("raw_llm_response"), parse_dt(item.get("created_at"))
+        content = _load_json(item.get("editorial_content"), None)
+        if item.get("email_sent") and content:
+            return json.dumps(content), parse_dt(item.get("email_sent_time"))
     return None
 
 
@@ -362,7 +392,11 @@ def get_latest_completed_draft_for_brew(brew_id, exclude_run_id=None):
 # =============================================================================
 
 def list_recent_feedback_for_user(user_id, limit=10):
-    """Return [(feedback_type, article_position)] for a user's recent feedback."""
+    """Return feedback with article context so a preference can inform curation.
+
+    A bare position is not meaningful outside its original briefing. Keep the
+    title/source/URL captured with the feedback; position 0 is a valid article.
+    """
     resp = table("user_feedback").query(
         IndexName="user-index",
         KeyConditionExpression=Key("user_id").eq(user_id),
@@ -372,7 +406,13 @@ def list_recent_feedback_for_user(user_id, limit=10):
     out = []
     for item in resp.get("Items", []):
         pos = item.get("article_position")
-        out.append((item.get("feedback_type"), to_int(pos, None) if pos is not None else None))
+        out.append({
+            "type": item.get("feedback_type"),
+            "article_position": to_int(pos, None) if pos is not None else None,
+            "headline": item.get("article_title") or "",
+            "source": item.get("article_source") or "",
+            "url": item.get("source_url") or "",
+        })
     return out
 
 
@@ -494,6 +534,7 @@ class OptimizedQueries:
                 parse_dt(b.get("created_at")),
                 bool(b.get("is_active", True)),
                 to_int(b.get("briefings_sent"), 0),
+                to_int(b.get("article_count"), 5),
             ))
         return rows
 
@@ -560,12 +601,12 @@ class OptimizedQueries:
         return feedback_id, "submitted"
 
     @staticmethod
-    def create_brew(user_id, name, topics, delivery_time):
+    def create_brew(user_id, name, topics, delivery_time, article_count=5):
         """Create a brew. Returns the new brew id."""
-        return create_brew_item(user_id, name, topics, delivery_time)
+        return create_brew_item(user_id, name, topics, delivery_time, article_count)
 
 
-def create_brew_item(user_id, name, topics, delivery_time):
+def create_brew_item(user_id, name, topics, delivery_time, article_count=5):
     """Create a brew record (active). Returns the new brew id."""
     brew_id = new_id()
     created = now_iso()
@@ -575,7 +616,7 @@ def create_brew_item(user_id, name, topics, delivery_time):
         "name": name,
         "topics": topics or [],
         "delivery_time": delivery_time,
-        "article_count": 5,
+        "article_count": article_count,
         "is_active": True,
         "active_flag": "ACTIVE",
         "briefings_sent": 0,
