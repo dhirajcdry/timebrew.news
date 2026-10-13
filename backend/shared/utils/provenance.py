@@ -67,8 +67,15 @@ def _date_in_window(value, window_start, now):
 
 
 def provider_sources(response):
-    """Index genuine provider envelope metadata, never parsed model content."""
+    """Index provider evidence without confusing publication and retrieval dates.
+
+    Explicit publication fields outrank generic provider dates across all records
+    for a URL. Conflicts within that tier reject the source instead of making it
+    undated (which would bypass the freshness gate). Updated/retrieved timestamps
+    are never publication evidence. Provider metadata is not a publisher-page check.
+    """
     evidence = {}
+    publication_dates = {}
     candidates = []
     for citation in response.get("citations", []) or []:
         if isinstance(citation, str):
@@ -89,9 +96,22 @@ def provider_sources(response):
         for field in ("title", "content"):
             if isinstance(item.get(field), str) and item[field].strip():
                 record[field] = item[field].strip()[:12000]
-        published = normalize_publication_date(item.get("published_at") or item.get("date") or item.get("published_date"))
-        if published:
-            record["published_at"] = published
+        dates = publication_dates.setdefault(url, {"explicit": set(), "generic": set()})
+        for field, tier in (("published_at", "explicit"), ("published_date", "explicit"), ("date", "generic")):
+            published = normalize_publication_date(item.get(field))
+            if published:
+                dates[tier].add(published)
+    for url, dates in publication_dates.items():
+        usable = dates["explicit"] or dates["generic"]
+        if not usable:
+            continue
+        timestamps = {value for value in usable if len(value) > 10}
+        # A date-only record and an exact timestamp on that UTC day agree. Two
+        # distinct timestamps do not: silently choosing either could alter recency.
+        if len({value[:10] for value in usable}) > 1 or len(timestamps) > 1:
+            evidence[url]["publication_date_conflict"] = True
+        else:
+            evidence[url]["published_at"] = next(iter(timestamps or usable))
     return evidence
 
 
@@ -140,6 +160,8 @@ def curate_with_provenance(articles, provider_response, *, desired_count=5,
             if url in seen_urls or _headline_identity(headline) in seen_titles:
                 raise ValueError("Article repeats a previously selected or delivered story")
             source_record = evidence[url]
+            if source_record.get("publication_date_conflict"):
+                raise ValueError("Provider publication dates conflict")
             published = source_record.get("published_at")
             if not _date_in_window(published, window_start, now):
                 raise ValueError("Known publication date is outside the requested window")

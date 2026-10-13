@@ -91,3 +91,17 @@ def test_curator_with_only_a_section_citation_withholds_email(curator_dependenci
         news_curator.lambda_handler({"run_id": "run-1", "brew_id": "brew-1"}, None)
     assert mocks["update_curator_log"].call_args.args[1] == []
     assert mocks["update_run_stage"].call_args.args == ("run-1", "failed")
+
+
+def test_curator_with_conflicting_publication_evidence_withholds_email(curator_dependencies):
+    mocks, response = curator_dependencies
+    response["search_results"] = [
+        {"url": url, field: date}
+        for url in response["citations"]
+        for field, date in (("published_at", "2026-10-11"), ("published_date", "2026-10-12"))
+    ]
+    with pytest.raises(ValueError, match="withheld rather than fabricated"):
+        news_curator.lambda_handler({"run_id": "run-1", "brew_id": "brew-1"}, None)
+    assert mocks["update_curator_log"].call_args.args[1] == []
+    assert "conflict" in mocks["update_curator_log"].call_args.args[2].lower()
+    assert mocks["update_run_stage"].call_args.args == ("run-1", "failed")

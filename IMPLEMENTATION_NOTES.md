@@ -23,6 +23,10 @@ branch and draft pull request; no production merge or deployment is included.
 - No restored rejected links, invented relative timestamps, or empty-day filler.
   Known out-of-window dates are rejected; unknown dates stay explicitly unavailable.
   An empty/unprovenanced source set withholds the email and records a failed run.
+- Publication aliases are normalized separately and merged across source records.
+  Explicit publication evidence takes precedence over generic provider dates;
+  conflicting equally authoritative dates reject the source. Retrieval/update
+  timestamps never become publication dates.
 - The selected article count survives creation, storage, list/detail API responses,
   and the run snapshot. It is a ceiling: fewer stories are better than unsupported filler.
 - Feedback uses the actual saved article identity and reaches the curator prompt.
@@ -35,10 +39,13 @@ branch and draft pull request; no production merge or deployment is included.
 
 ## Checks performed
 
-- Backend: 160 offline regression tests passed. Network connections are disabled
+- Backend: 182 offline regression tests passed. Network connections are disabled
   by the test fixture; provider, database and SES calls are mocked.
 - Synthetic email regressions cover trailing inline `**Takeaway:**` text with and
   without a separate takeaway field: HTML formatting and plain text are readable.
+- Synthetic date regressions cover explicit/generic conflicts, duplicate evidence
+  ordering, malformed aliases, update/retrieval-only metadata, equivalent timezone
+  offsets, and date-only versus timestamp precision.
 - Python compilation and `git diff --check`: passed.
 - Frontend TypeScript/production build: passed.
 - ESLint: zero errors, with 65 existing-style warnings in auth/dashboard/common
@@ -87,7 +94,9 @@ The email preview script uses only local code and a historical fixture. Open
    quality step is retrieved article evidence plus claim checking and measured
    editorial evaluation, including quiet-news days.
 2. Unknown-date sources can be included with an unavailable-date label. Their
-   recency is not established by this gate.
+   recency is not established by this gate. Provider-supplied dates are not checked
+   against publisher pages; incorrect provider dates and temporal claims in prose
+   remain part of the claim-verification limitation above.
 3. Existing in-flight curator/editor records without the new provenance must be
    recurated. Do not invent provenance by backfilling from old generated JSON.
 4. SES acceptance and the saved sent flag are not atomic. A crash in that gap, an

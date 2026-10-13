@@ -128,6 +128,77 @@ def test_rejects_known_stale_and_future_publication(date):
     assert "outside" in reasons[0]
 
 
+@pytest.mark.parametrize("field", ["retrieved_at", "last_updated", "updated_at", "last_crawled_at"])
+def test_retrieval_and_update_dates_never_become_publication(field):
+    sources, _ = curate_with_provenance([candidate()],
+        {"search_results": [{"url": URL, field: "2026-10-12T10:00:00Z"}]}, now=NOW)
+    assert sources[0]["published_at"] is None
+    assert sources[0]["published_time"] == UNKNOWN_PUBLICATION
+
+
+@pytest.mark.parametrize("publication", [
+    {"published_date": "2026-10-01", "date": "2026-10-12"},
+    {"published_at": "2026-10-01", "last_updated": "2026-10-12"},
+    {"published_at": "not a date", "published_date": "2026-10-01", "date": "2026-10-12"},
+    {"published_at": "not a date", "date": "2026-10-01"},
+])
+def test_recent_or_invalid_alias_cannot_mask_known_stale_publication(publication):
+    sources, reasons = curate_with_provenance([candidate()],
+        {"search_results": [{"url": URL, **publication}]},
+        now=NOW, window_start=NOW - timedelta(days=3))
+    assert sources == []
+    assert "outside" in reasons[0]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_explicit_publication_wins_across_duplicate_evidence_records(reverse):
+    records = [{"url": URL, "published_at": "2026-10-01"},
+               {"url": URL + "?utm_source=fixture", "date": "2026-10-12"}]
+    if reverse:
+        records.reverse()
+    sources, reasons = curate_with_provenance([candidate()],
+        {"citations": records[:1], "search_results": records[1:]},
+        now=NOW, window_start=NOW - timedelta(days=3))
+    assert sources == []
+    assert "outside" in reasons[0]
+
+
+@pytest.mark.parametrize("records", [
+    [{"published_at": "2026-10-11", "published_date": "2026-10-12"}],
+    [{"published_at": "2026-10-11"}, {"published_date": "2026-10-12"}],
+    [{"date": "2026-10-11"}, {"date": "2026-10-12"}],
+    [{"published_at": "2026-10-12T08:00:00Z"}, {"published_at": "2026-10-12T09:00:00Z"}],
+])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_conflicting_publication_evidence_fails_closed(records, reverse):
+    if reverse:
+        records = list(reversed(records))
+    sources, reasons = curate_with_provenance([candidate()],
+        {"search_results": [{"url": URL, **record} for record in records]}, now=NOW)
+    assert sources == []
+    assert "conflict" in reasons[0].lower()
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_equivalent_and_different_precision_publication_dates_are_compatible(reverse):
+    records = [{"url": URL, "published_at": "2026-10-12T10:00:00+02:00"},
+               {"url": URL, "published_date": "2026-10-12"},
+               {"url": URL, "published_at": "2026-10-12T08:00:00Z"}]
+    if reverse:
+        records.reverse()
+    sources, reasons = curate_with_provenance([candidate()], {"search_results": records}, now=NOW)
+    assert reasons == []
+    assert sources[0]["published_at"] == "2026-10-12T08:00:00Z"
+
+
+def test_unusable_date_alias_does_not_mask_valid_publication_alias():
+    sources, reasons = curate_with_provenance([candidate()], {"search_results": [{
+        "url": URL, "published_at": "not a date", "published_date": "2026-10-11",
+    }]}, now=NOW)
+    assert reasons == []
+    assert sources[0]["published_at"] == "2026-10-11"
+
+
 def test_deduplicates_history_and_honors_requested_count():
     candidates = [candidate(URL + str(i), headline=f"Story {i}") for i in range(5)]
     sources, rejected = curate_with_provenance(candidates, {"citations": [a["url"] for a in candidates]},
